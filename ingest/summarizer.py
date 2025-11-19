@@ -11,6 +11,12 @@ UNWANTED_KEYWORDS = ["Copyright", "©", "all rights reserved", "terms of use", "
 
 MODEL_NAME = "facebook/bart-large-cnn"
 
+DEFAULT_CACHE = Path("/home/christianfita/news-scrawler-ai/models/transformers")
+
+raw_cache = os.getenv("TRANSFORMERS_CACHE")
+cache_path = Path(raw_cache) if raw_cache else DEFAULT_CACHE
+if not cache_path.is_absolute():
+    cache_path = DEFAULT_CACHE  # or repo_root / cache_path
 # Resolve cache dir:
 # 1) use TRANSFORMERS_CACHE if set
 # 2) else use project-local 'models/transformers'
