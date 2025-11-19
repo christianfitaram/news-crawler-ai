@@ -7,6 +7,8 @@ selenium_dw_extract_links.py
 """
 
 import os
+import os
+import shutil
 import time
 import re
 from selenium import webdriver
@@ -56,27 +58,55 @@ COOKIE_BUTTON_XPATHS = [
     "//button[contains(@class,'cookie') or contains(@class,'consent') or contains(@class,'accept') or contains(@id,'cookie') or contains(@id,'consent')]",
 ]
 
+
+CHROME_BINARY_ENV = "CHROME_BINARY"
+CHROMEDRIVER_ENV = "CHROMEDRIVER_PATH"
+
+
 def _resolve_chrome_binary():
-    """Return a Chrome/Chromium binary path if the environment provides one."""
-    env_path = os.getenv("CHROME_BINARY")
+    """Return a Chrome binary path, honoring overrides for custom installations."""
+    env_path = os.getenv(CHROME_BINARY_ENV)
+    if env_path:
+        env_path = env_path.strip()
+        if os.path.exists(env_path):
+            return env_path
+
     candidates = [
-        env_path,
         "/usr/bin/google-chrome",
         "/usr/bin/google-chrome-stable",
         "/usr/bin/chromium-browser",
         "/usr/bin/chromium",
+        shutil.which("google-chrome"),
+        shutil.which("google-chrome-stable"),
+        shutil.which("chromium-browser"),
+        shutil.which("chromium"),
     ]
     for candidate in candidates:
         if candidate and os.path.exists(candidate):
             return candidate
-    return None
 
+    raise RuntimeError(
+        "Chrome/Chromium binary not found. Install google-chrome or chromium, "
+        f"or set {CHROME_BINARY_ENV}=/full/path/to/chrome before running this crawler."
+    )
+
+
+def _resolve_chromedriver_path():
+    """Return a chromedriver path, enabling offline reuse via an env override."""
+    env_path = os.getenv(CHROMEDRIVER_ENV)
+    if env_path:
+        env_path = env_path.strip()
+        if os.path.exists(env_path):
+            return env_path
+        raise RuntimeError(
+            f"{CHROMEDRIVER_ENV} is set to '{env_path}' but the file does not exist."
+        )
+    # webdriver-manager caches drivers locally, so calling install is safe
+    return ChromeDriverManager().install()
 
 def build_driver(headless=True):
     options = webdriver.ChromeOptions()
-    chrome_binary = _resolve_chrome_binary()
-    if chrome_binary:
-        options.binary_location = chrome_binary
+    options.binary_location = _resolve_chrome_binary()
     if headless:
         # use new-headless mode when available
         options.add_argument("--headless=new")
@@ -86,9 +116,12 @@ def build_driver(headless=True):
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--remote-debugging-port=0")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--single-process")
     # optional: mimic regular user agent
     options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36")
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    driver_path = _resolve_chromedriver_path()
+    driver = webdriver.Chrome(service=Service(driver_path), options=options)
     return driver
 
 def try_click(element):
