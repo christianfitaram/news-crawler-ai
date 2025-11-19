@@ -1,53 +1,83 @@
 # python
 # file: 'ingest/summarizer.py'
+
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import os
 from pathlib import Path
 import re
 import torch
-from dotenv import load_dotenv; load_dotenv()
+from dotenv import load_dotenv
 
-UNWANTED_KEYWORDS = ["Copyright", "©", "all rights reserved", "terms of use", "bbc is not responsible", "AP Photo", "r"]
+load_dotenv()
+
+UNWANTED_KEYWORDS = [
+    "Copyright",
+    "©",
+    "all rights reserved",
+    "terms of use",
+    "bbc is not responsible",
+    "AP Photo",
+    "r",
+]
 
 MODEL_NAME = "facebook/bart-large-cnn"
 
-DEFAULT_CACHE = Path("/home/christianfita/news-scrawler-ai/models/transformers")
+# -------------------------------------------------------------------
+# CACHE DIRECTORY RESOLUTION (FIXED)
+# -------------------------------------------------------------------
 
-raw_cache = os.getenv("TRANSFORMERS_CACHE")
-cache_path = Path(raw_cache) if raw_cache else DEFAULT_CACHE
+# Base dir of the project (assuming: <root>/ingest/summarizer.py)
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Default cache directory inside the project
+DEFAULT_CACHE = (BASE_DIR / "models" / "transformers").resolve()
+
+# Use TRANSFORMERS_CACHE if set, otherwise DEFAULT_CACHE
+env_cache = os.getenv("TRANSFORMERS_CACHE")
+
+if env_cache:
+    cache_path = Path(env_cache).expanduser()
+else:
+    cache_path = DEFAULT_CACHE
+
+# Ensure it's an absolute Path
 if not cache_path.is_absolute():
-    cache_path = DEFAULT_CACHE  # or repo_root / cache_path
-# Resolve cache dir:
-# 1) use TRANSFORMERS_CACHE if set
-# 2) else use project-local 'models/transformers'
-_BASE_DIR = Path(__file__).resolve().parent
-_env_cache = os.getenv("TRANSFORMERS_CACHE")
-print(_env_cache)
-cache_path = Path(_env_cache).expanduser() if _env_cache else ("/home/christianfita/news-scrawler-ai/models/transformers")
-cache_path = cache_path if cache_path.is_absolute() else ("/home/christianfita/news-scrawler-ai/models/transformers")
+    cache_path = DEFAULT_CACHE
+
+# Create directory if needed
 cache_path.mkdir(parents=True, exist_ok=True)
 CACHE_DIR = str(cache_path)
 
-# Load from local cache only (no network)
+print(f"Summarizer: using transformers cache at {CACHE_DIR}")
+
+# -------------------------------------------------------------------
+# MODEL & TOKENIZER LOADING
+# -------------------------------------------------------------------
+
+# Load from cache (will download if not present, once)
 tokenizer = AutoTokenizer.from_pretrained(
     MODEL_NAME,
     cache_dir=CACHE_DIR,
     local_files_only=False,
     use_fast=True,
 )
+
 model = AutoModelForSeq2SeqLM.from_pretrained(
     MODEL_NAME,
     cache_dir=CACHE_DIR,
     local_files_only=False,
 )
 
-# Device selection for summarizer: prefer CUDA > MPS > CPU
+# -------------------------------------------------------------------
+# DEVICE SELECTION (GLOBAL)
+# -------------------------------------------------------------------
+
 if torch.cuda.is_available():
     _torch_dev = torch.device("cuda:0")
     _pipeline_device = 0
 elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
     _torch_dev = torch.device("mps")
-    # HF pipeline may not accept 'mps' as device argument; use CPU index but keep model on mps
+    # HF pipeline may not accept 'mps' as device index; use CPU index but keep model on mps
     _pipeline_device = -1
 else:
     _torch_dev = torch.device("cpu")
@@ -56,9 +86,14 @@ else:
 try:
     model.to(_torch_dev)
 except Exception:
+    # Don't crash if device move fails (e.g. no MPS backend in this build)
     pass
 
-print(f"Summarizer: torch version={torch.__version__}, cuda_available={torch.cuda.is_available()}, device({_torch_dev}), pipeline_device={_pipeline_device}")
+print(
+    f"Summarizer: torch version={torch.__version__}, "
+    f"cuda_available={torch.cuda.is_available()}, "
+    f"device={_torch_dev}, pipeline_device={_pipeline_device}"
+)
 
 # Create the summarization pipeline once and reuse
 _summarizer_pipeline = pipeline(
@@ -68,12 +103,21 @@ _summarizer_pipeline = pipeline(
     device=_pipeline_device,
 )
 
+# -------------------------------------------------------------------
+# HELPERS
+# -------------------------------------------------------------------
+
 def is_photo_credit(text: str) -> bool:
     return bool(re.search(r"\(AP Photo/.*?\)", text, flags=re.IGNORECASE))
 
+
 def chunk_text(text: str, max_tokens: int = 512):
+    """
+    Split text into chunks based on sentence boundaries, limited by token count.
+    """
     sentences = re.split(r"(?<=[.!?]) +", text)
     chunks, current, cur_len = [], "", 0
+
     for s in sentences:
         tlen = len(tokenizer.encode(s, add_special_tokens=False))
         if cur_len + tlen > max_tokens:
@@ -83,24 +127,29 @@ def chunk_text(text: str, max_tokens: int = 512):
         else:
             current += (" " if current else "") + s
             cur_len += tlen
+
     if current:
         chunks.append(current.strip())
+
     return chunks
+
+
+# -------------------------------------------------------------------
+# MAIN SUMMARIZE FUNCTION
+# -------------------------------------------------------------------
 
 def smart_summarize(text: str, device: str = "auto") -> str:
     text = text.strip()
     if len(text) < 200:
         return text
 
-    # Select device
-    # Determine torch device and pipeline device index
+    # Select device dynamically if requested
     if device == "auto":
         if torch.cuda.is_available():
             torch_dev = torch.device("cuda:0")
             pipeline_device = 0
         elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
             torch_dev = torch.device("mps")
-            # HF pipeline often doesn't accept 'mps' as device index; use CPU index and keep model on MPS
             pipeline_device = -1
         else:
             torch_dev = torch.device("cpu")
@@ -125,18 +174,21 @@ def smart_summarize(text: str, device: str = "auto") -> str:
                 torch_dev = torch.device("cpu")
                 pipeline_device = -1
 
-    # Use the pre-created pipeline and ensure model is on the desired torch device
+    # Move model to desired device (pipeline is already created)
     try:
         model.to(torch_dev)
     except Exception:
         pass
+
     summarizer = _summarizer_pipeline
 
     chunks = chunk_text(text)
     summaries = []
+
     for chunk in chunks:
         try:
             in_len = len(tokenizer.encode(chunk, add_special_tokens=False))
+
             if in_len < 200:
                 max_len = max(int(in_len * 0.8), 20)
                 min_len = min(10, max_len // 2)
@@ -150,14 +202,18 @@ def smart_summarize(text: str, device: str = "auto") -> str:
                 do_sample=False,
                 truncation=True,
             )[0]["summary_text"]
+
             summaries.append(out)
 
-            if torch.backends.mps.is_available():
+            if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
                 torch.mps.empty_cache()
         except Exception as e:
             print(f"Error summarizing chunk: {e}")
 
     result = "\n".join(summaries)
+
+    # If the final summary is still too long, recursively summarize again
     if len(tokenizer.encode(result, add_special_tokens=False)) > 512:
         return smart_summarize(result, device=device)
+
     return result
