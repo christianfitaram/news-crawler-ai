@@ -60,6 +60,7 @@ def get_news_data(insert_id, timeout=10):
             return None
         data_to_return = {
             "article_id": data.get("id"),
+            "url": data.get("url"),
             "title": data.get("title"),
             "text": data.get("text"),
             "topic": data.get("topic"),
