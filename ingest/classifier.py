@@ -263,6 +263,7 @@ def classify_articles():
             insert_id = repo_articles.create_articles(classified_article)
             send_to_webhook(insert_id)
             add_one_to_total_articles_in_documents()
+            add_one_to_topic_data_in_documents(topic_label)
             repo_link_pool.update_link_in_pool({"url": article.get("url")},
                                                {"$set": {"is_articles_processed": True, "sample": id_for_metadata}})
 
@@ -336,6 +337,12 @@ def add_one_to_total_articles_in_documents():
     repo_global_metadata.update_metadata(selector, update_data)
     total_articles = repo_articles.count_articles({})
     print(f"Total documents in the database: {total_articles}")
+
+def add_one_to_topic_data_in_documents(topic: str):
+    selector = {"_id": ObjectId("6923b800f3d19f7c28f53a6d"), "topics_data.topic": topic}
+    update_data = {"$inc": {"topics_data.$.document_count": 1}}
+    repo_global_metadata.update_metadata(selector, update_data)
+    print(f"Incremented topic count for topic: {topic}")
 
 if __name__ == "__main__":
     classify_articles()
