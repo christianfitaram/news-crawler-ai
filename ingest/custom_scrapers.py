@@ -27,6 +27,13 @@ LANACION_ARTICLE_RE = re.compile(
     r"^https?://(www\.)?lanacion\.com\.ar/.+-nid\d+/?$"
 )
 
+
+ELUNIVERSAL_BASE_URL = "https://www.eluniversal.com.mx/"
+ELUNIVERSAL_ARTICLE_RE = re.compile(
+    r"^https?://(www\.)?eluniversal\.com\.mx/.+/.+/?$",
+    re.IGNORECASE,
+)
+
 def scrape_lanacion_stream() -> Iterable[Dict]:
     try:
         res = requests.get(LANACION_BASE_URL, timeout=10)
@@ -81,6 +88,81 @@ def get_title_from_dw_url(url: str) -> str:
     except Exception as e:
         print(f"Error fetching title from DW URL {url}: {e}")
     return "DW Article"
+
+
+
+def scrape_eluniversal_stream() -> Iterable[Dict]:
+    # para evitar que nos interprete la web como bot, añadimos headers de navegadores:
+    HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0 Safari/537.36"
+        )
+    }
+
+    try:
+        res = requests.get(ELUNIVERSAL_BASE_URL, headers=HEADERS, timeout=10)
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, "html.parser")
+    except Exception as e:
+        print(f"[el-universal] Error scraping homepage: {e}")
+        return
+    seen_urls: set[str] = set()
+    # Secciones que nos podrían interesar
+    VALID_PATH_PREFIXES = (
+    "/nacion/",
+    "/mundo/",
+    "/metropoli/",
+    "/estados/",
+    "/politica/",
+    "/cartera/",
+    "/cultura/",
+    "/deportes/",
+    "/ciencia-y-salud/",
+    "/techbit/",
+    "/seguridad/",
+    "/cdmx/",
+)
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        # Normalizar URLs relativas o protocolo-relativas
+        if href.startswith("//"):
+            href = "https:" + href
+        elif href.startswith("/"):
+            href = "https://www.eluniversal.com.mx" + href
+        if not href.startswith("https://www.eluniversal.com.mx"):
+            continue
+        # Filtrar por rutas que parezcan notícias
+        from urllib.parse import urlparse
+        path = urlparse(href).path or ""
+        if not any(path.startswith(prefix) for prefix in VALID_PATH_PREFIXES):
+            continue
+        if not ELUNIVERSAL_ARTICLE_RE.match(href):
+            continue
+        if href in seen_urls:
+            continue
+        seen_urls.add(href)
+        title = a.get_text(strip=True)
+        # A veces los enlaces tienen solo “Leer más” o cosas muy cortas
+        if not title or len(title) < 8:
+            continue
+        if is_urls_processed_already(href):
+            continue
+        full_text = fetch_and_extract(href)
+        if not full_text:
+            continue
+        try:
+            repo.insert_link({"url": href})
+        except Exception as e:
+            print(f"[el-universal] Warning inserting link: {e}")
+        yield {
+            "title": title,
+            "url": href,
+            "text": full_text,
+            "source": "el-universal-mx",
+            "scraped_at": datetime.now(timezone.utc),
+        }
 
 
 def scrape_bbc_stream() -> Iterable[Dict]:
