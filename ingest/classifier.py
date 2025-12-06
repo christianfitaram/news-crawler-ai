@@ -345,7 +345,6 @@ Text to rewrite:""" + prompt
         response = client.models.generate_content(
         model="gemini-3-pro-preview",
         contents=prompt_final,
-        timeout=timeout
         )
         return response.text.strip()
     except Exception as e:
