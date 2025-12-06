@@ -234,7 +234,7 @@ def classify_articles():
             topic = topic_pipeline(summary, candidate_labels=CANDIDATE_TOPICS)
             sentiment = sentiment_pipeline(summary)[0]
             try:
-                text_cleaned = call_to_gpt_api(article.get("text"), timeout=60)  # 60 second timeout
+                text_cleaned = call_to_genai_api(article.get("text"), timeout=60)  # 60 second timeout
             except Exception as e:
                 print(f"[{i}] ⚠️ Text cleaning failed: {e}, using original text")
                 text_cleaned = article.get("text", "")
@@ -343,7 +343,7 @@ Text to rewrite:""" + prompt
     
     try:
         response = client.models.generate_content(
-        model="gemini-3-pro-preview",
+        model="gemini-2.5-flash",
         contents=prompt_final,
         )
         return response.text.strip()
