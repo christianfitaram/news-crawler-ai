@@ -3,7 +3,7 @@ import os
 
 from dotenv import load_dotenv
 
-from ingest.call_to_webhook import send_to_all_webhooks
+from .call_to_webhook import send_to_all_webhooks
 
 load_dotenv()
 from collections import Counter
@@ -73,7 +73,7 @@ SKIP_TITLE_PHRASES = [
 
 # Load HuggingFace sentiment_pipeline
 MODEL_NAME = "distilbert-base-uncased-finetuned-sst-2-english"
-CACHE_DIR = CACHE_DIR_FROM_ENV if CACHE_DIR_FROM_ENV else "/home/christianfita/news-scrawler-ai/models/transformers"
+CACHE_DIR = CACHE_DIR_FROM_ENV if CACHE_DIR_FROM_ENV else "/home/christianfita/apps/news-crawler-ai/models/transformers"
 
 # Device detection: prefer CUDA, then MPS (Apple), else CPU
 # For transformers.pipeline pass an integer device index (0 for first CUDA GPU, -1 for CPU)
@@ -135,7 +135,7 @@ except Exception as e:
 
 # Load HuggingFace topic_pipeline
 MODEL_NAME_TOPIC = "facebook/bart-large-mnli"
-CACHE_DIR_TOPIC = CACHE_DIR_FROM_ENV if CACHE_DIR_FROM_ENV else "/home/christianfita/news-scrawler-ai/models/transformers"
+CACHE_DIR_TOPIC = CACHE_DIR_FROM_ENV if CACHE_DIR_FROM_ENV else "/home/christianfita/apps/news-crawler-ai/models/transformers"
 
 tokenizer_topic = AutoTokenizer.from_pretrained(MODEL_NAME_TOPIC, cache_dir=CACHE_DIR_TOPIC)
 model_topic = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME_TOPIC, cache_dir=CACHE_DIR_TOPIC)
