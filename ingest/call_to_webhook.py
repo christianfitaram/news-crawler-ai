@@ -130,7 +130,7 @@ def send_to_webhook_thread_events(insert_id, webhook_url=None):
             "scraped_at": data.get("scraped_at"),
         }
         target_url = webhook_url or os.getenv("WEBHOOK_URL_THREAD_EVENTS",
-                                              "https://www.servicete.newsapi.one/webhooks/article-vectorized")
+                                              "http://0.0.0.0:8000/webhooks/article-vectorized")
         headers = {"Content-Type": "application/json"}
         return _post_json(target_url, payload, headers, timeout=DEFAULT_TIMEOUT)
     except requests.exceptions.RequestException as e:
