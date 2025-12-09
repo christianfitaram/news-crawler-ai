@@ -3,7 +3,7 @@ httpx
 trafilatura~=2.0.0
 beautifulsoup4~=4.13.5
 lxml
-
+lxml_html_clean
 # CLI & logging
 typer
 rich

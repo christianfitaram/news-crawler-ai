@@ -1,0 +1,18 @@
+[Unit]
+Description=News Crawler AI pipeline
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=christianfita
+WorkingDirectory=/home/christianfita/apps/news-crawler-ai
+EnvironmentFile=/home/christianfita/apps/news-crawler-ai/.env
+ExecStart=/home/christianfita/apps/news-crawler-ai/.venv/bin/python -m ingest.classifier
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
