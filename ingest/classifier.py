@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 
 from .call_to_webhook import send_to_all_webhooks
+from pathlib import Path
 
 load_dotenv()
 from collections import Counter
@@ -70,10 +71,14 @@ SKIP_TITLE_PHRASES = [
     "Top stories in 90 seconds",
     "Accessibility statement"
 ]
+# Base dir of the project (assuming: <root>/ingest/summarizer.py)
+BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Default cache directory inside the project
+DEFAULT_CACHE = (BASE_DIR / "models" / "transformers").resolve()
 # Load HuggingFace sentiment_pipeline
 MODEL_NAME = "distilbert-base-uncased-finetuned-sst-2-english"
-CACHE_DIR = CACHE_DIR_FROM_ENV if CACHE_DIR_FROM_ENV else "/home/christianfita/apps/news-crawler-ai/models/transformers"
+CACHE_DIR = CACHE_DIR_FROM_ENV if CACHE_DIR_FROM_ENV else str(DEFAULT_CACHE)
 
 # Device detection: prefer CUDA, then MPS (Apple), else CPU
 # For transformers.pipeline pass an integer device index (0 for first CUDA GPU, -1 for CPU)
@@ -135,7 +140,7 @@ except Exception as e:
 
 # Load HuggingFace topic_pipeline
 MODEL_NAME_TOPIC = "facebook/bart-large-mnli"
-CACHE_DIR_TOPIC = CACHE_DIR_FROM_ENV if CACHE_DIR_FROM_ENV else "/home/christianfita/apps/news-crawler-ai/models/transformers"
+CACHE_DIR_TOPIC = CACHE_DIR_FROM_ENV if CACHE_DIR_FROM_ENV else "/Users/christianfita/Desktop/Projects/NewsFeeder-IA/models/transformers"
 
 tokenizer_topic = AutoTokenizer.from_pretrained(MODEL_NAME_TOPIC, cache_dir=CACHE_DIR_TOPIC)
 model_topic = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME_TOPIC, cache_dir=CACHE_DIR_TOPIC)
@@ -234,7 +239,7 @@ def classify_articles():
             topic = topic_pipeline(summary, candidate_labels=CANDIDATE_TOPICS)
             sentiment = sentiment_pipeline(summary)[0]
             try:
-                text_cleaned = call_to_genai_api(article.get("text"), timeout=60)  # 60 second timeout
+                text_cleaned = call_to_gpt_api(article.get("text"), timeout=60)  # 60 second timeout
             except Exception as e:
                 print(f"[{i}] ⚠️ Text cleaning failed: {e}, using original text")
                 text_cleaned = article.get("text", "")
@@ -263,7 +268,7 @@ def classify_articles():
 
             # inserting data into mongoDB
             insert_id = repo_articles.create_articles(classified_article)
-            send_to_all_webhooks(insert_id)
+            #send_to_all_webhooks(insert_id)
             add_one_to_total_articles_in_documents()
             add_one_to_topic_data_in_documents(topic_label)
             repo_link_pool.update_link_in_pool({"url": article.get("url")},
@@ -306,7 +311,7 @@ def classify_articles():
 
 
 def call_to_gpt_api(prompt: str, timeout: int = 60) -> str:
-    prompt_final = """You are a professional text cleaner.
+    prompt_final = """You are a professional text cleaner.  
 Your task:
 - Remove any reference to news outlets, authors, publication names, URLs, or web layout artifacts.
 - Discard malformed, incomplete, or irrelevant fragments.
@@ -317,7 +322,7 @@ Text to rewrite:
     api_url = "http://localhost:11434/api/generate"
 
     payload = {
-        "model": "gpt-oss:20b",
+        "model": "gpt-oss:120b-cloud",
         "prompt": prompt_final,
         "stream": False
     }

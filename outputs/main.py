@@ -1,11 +1,7 @@
-from datetime import datetime, date, UTC, timezone
 from lib.repositories.articles_repository import ArticlesRepository
 from lib.repositories.metadata_repository import MetadataRepository
 from lib.repositories.link_pool_repository import LinkPoolRepository
 
-def _sample_date():
-    dateNow = datetime.now(UTC).date()
-    print(dateNow)
 
 
 def articles():
@@ -48,5 +44,12 @@ def countArticles():
     count = repo.count_articles({})
     print(f"Total articles count: {count}")
 
+def articles_documents_grouped_by_source():
+    repo = ArticlesRepository()
+    grouped_articles = repo.get_articles_grouped_by_source()
+    for source, articles in grouped_articles.items():
+        print(f"Source: {source}")
+        print("----")
+
 if __name__ == "__main__":
-    countArticles()
+    articles_documents_grouped_by_source()

@@ -191,3 +191,394 @@ def scrape_dw_stream() -> Iterable[Dict]:
         except Exception as e:
             print(f"Error processing DW link {link}: {e}")
             continue
+
+def scrape_guardian_stream() -> Iterable[Dict]:
+    """Scrape The Guardian using RSS feeds"""
+    GUARDIAN_RSS_FEEDS = {
+        "world": "https://www.theguardian.com/world/rss",
+        "business": "https://www.theguardian.com/business/rss",
+        "technology": "https://www.theguardian.com/technology/rss",
+        "science": "https://www.theguardian.com/science/rss",
+        "environment": "https://www.theguardian.com/environment/rss",
+        "politics": "https://www.theguardian.com/politics/rss",
+    }
+    
+    for category, rss_url in GUARDIAN_RSS_FEEDS.items():
+        try:
+            feed = feedparser.parse(rss_url)
+        except Exception as e:
+            print(f"Error parsing Guardian RSS feed ({category}): {e}")
+            continue
+        
+        for e in feed.entries:
+            url = e.get("link")
+            title = (e.get("title") or "").strip()
+            if not url or not title:
+                continue
+            if is_urls_processed_already(url):
+                continue
+            text = fetch_and_extract(url)
+            if not text:
+                continue
+            repo.insert_link({"url": url})
+            yield {
+                "title": title,
+                "url": url,
+                "text": text,
+                "source": "the-guardian",
+                "scraped_at": datetime.now(timezone.utc),
+            }
+
+
+def scrape_reuters_stream() -> Iterable[Dict]:
+    """Scrape Reuters using RSS feeds"""
+    REUTERS_RSS_FEEDS = {
+        "world": "https://www.reuters.com/rssFeed/worldNews",
+        "business": "https://www.reuters.com/rssFeed/businessNews",
+        "technology": "https://www.reuters.com/rssFeed/technologyNews",
+        "sports": "https://www.reuters.com/rssFeed/sportsNews",
+        "entertainment": "https://www.reuters.com/rssFeed/entertainmentNews",
+    }
+    
+    for category, rss_url in REUTERS_RSS_FEEDS.items():
+        try:
+            feed = feedparser.parse(rss_url)
+        except Exception as e:
+            print(f"Error parsing Reuters RSS feed ({category}): {e}")
+            continue
+        
+        for e in feed.entries:
+            url = e.get("link")
+            title = (e.get("title") or "").strip()
+            if not url or not title:
+                continue
+            if is_urls_processed_already(url):
+                continue
+            text = fetch_and_extract(url)
+            if not text:
+                continue
+            repo.insert_link({"url": url})
+            yield {
+                "title": title,
+                "url": url,
+                "text": text,
+                "source": "reuters",
+                "scraped_at": datetime.now(timezone.utc),
+            }
+def scrape_guardian_selenium_stream() -> Iterable[Dict]:
+    """Scrape The Guardian using Selenium for dynamic content"""
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from webdriver_manager.chrome import ChromeDriverManager
+    import time
+    
+    # Configurar opciones de Chrome
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")  # Ejecutar sin interfaz gráfica
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    
+    GUARDIAN_SECTIONS = {
+        "world": "https://www.theguardian.com/world",
+        "business": "https://www.theguardian.com/business",
+        "technology": "https://www.theguardian.com/technology",
+        "science": "https://www.theguardian.com/science",
+        "environment": "https://www.theguardian.com/environment",
+    }
+    
+    # Inicializar el driver
+    try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+    except Exception as e:
+        print(f"Error inicializando Selenium: {e}")
+        return
+    
+    try:
+        for category, section_url in GUARDIAN_SECTIONS.items():
+            print(f"\n📰 Scrapeando The Guardian - {category}...")
+            
+            try:
+                # Cargar la página
+                driver.get(section_url)
+                time.sleep(3)  # Esperar a que cargue el contenido
+                
+                # Buscar enlaces de artículos
+                # The Guardian usa diferentes selectores, probamos varios
+                article_links = driver.find_elements(By.CSS_SELECTOR, "a[data-link-name='article']")
+                
+                # Si no encuentra con ese selector, intenta otro
+                if not article_links:
+                    article_links = driver.find_elements(By.CSS_SELECTOR, "div.fc-item__container a")
+                
+                print(f"   Encontrados {len(article_links)} artículos en {category}")
+                
+                # Procesar los primeros 10 artículos
+                processed_urls = set()
+                
+                for link_element in article_links[:10]:
+                    try:
+                        article_url = link_element.get_attribute("href")
+                        
+                        # Evitar duplicados
+                        if not article_url or article_url in processed_urls:
+                            continue
+                        
+                        # Filtrar URLs que no sean artículos
+                        if not article_url or "theguardian.com" not in article_url:
+                            continue
+                        
+                        processed_urls.add(article_url)
+                        
+                        # Verificar si ya fue procesado en MongoDB
+                        if is_urls_processed_already(article_url):
+                            print(f" Ya procesado: {article_url[:60]}...")
+                            continue
+                        
+                        # Extraer contenido con trafilatura
+                        text = fetch_and_extract(article_url)
+                        
+                        if not text or len(text) < 100:
+                            print(f" Contenido insuficiente: {article_url[:60]}...")
+                            continue
+                        
+                        # Extraer título del elemento o de la URL
+                        try:
+                            title = link_element.text.strip()
+                            if not title:
+                                # Intentar obtener de un hijo
+                                title_element = link_element.find_element(By.CSS_SELECTOR, "span")
+                                title = title_element.text.strip()
+                        except:
+                            # Usar parte de la URL como título
+                            title = article_url.split("/")[-1].replace("-", " ").title()
+                        
+                        if not title:
+                            title = "The Guardian Article"
+                        
+                        # Guardar en link_pool
+                        repo.insert_link({"url": article_url})
+                        
+                        print(f"   {title[:60]}...")
+                        
+                        yield {
+                            "title": title,
+                            "url": article_url,
+                            "text": text,
+                            "source": "the-guardian-selenium",
+                            "scraped_at": datetime.now(timezone.utc),
+                        }
+                        
+                    except Exception as e:
+                        print(f"    Error procesando artículo: {e}")
+                        continue
+                
+                time.sleep(2)  # Pausa entre categorías
+                
+            except Exception as e:
+                print(f"Error scrapeando categoría {category}: {e}")
+                continue
+                
+    finally:
+        driver.quit()
+
+def scrape_france24_selenium_stream() -> Iterable[Dict]:
+    """Scrape France24 using Selenium"""
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from webdriver_manager.chrome import ChromeDriverManager
+    import time
+    
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    
+    FRANCE24_SECTIONS = {
+        "world": "https://www.france24.com/en/",
+        "europe": "https://www.france24.com/en/europe/",
+        "americas": "https://www.france24.com/en/americas/",
+        "middle-east": "https://www.france24.com/en/middle-east/",
+        "africa": "https://www.france24.com/en/africa/",
+        "asia-pacific": "https://www.france24.com/en/asia-pacific/",
+    }
+    
+    try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+    except Exception as e:
+        print(f"Error inicializando Selenium: {e}")
+        return
+    
+    try:
+        for category, section_url in FRANCE24_SECTIONS.items():
+            print(f"\n🇫🇷 Scrapeando France24 - {category}...")
+            driver.get(section_url)
+            time.sleep(3)
+            
+            # France24 usa estos selectores
+            article_links = driver.find_elements(By.CSS_SELECTOR, "article a.article__title-link")
+            if not article_links:
+                article_links = driver.find_elements(By.CSS_SELECTOR, ".m-item-list-article a")
+            if not article_links:
+                article_links = driver.find_elements(By.CSS_SELECTOR, "h2 a")
+            
+            print(f"   Encontrados {len(article_links)} artículos en {category}")
+            
+            processed_urls = set()
+            
+            for link_element in article_links[:10]:
+                try:
+                    article_url = link_element.get_attribute("href")
+                    
+                    if not article_url or article_url in processed_urls:
+                        continue
+                    
+                    # Construir URL completa si es relativa
+                    if article_url.startswith("/"):
+                        article_url = "https://www.france24.com" + article_url
+                    
+                    if "france24.com" not in article_url:
+                        continue
+                    
+                    processed_urls.add(article_url)
+                    
+                    if is_urls_processed_already(article_url):
+                        print(f"  Ya procesado: {article_url[:60]}...")
+                        continue
+                    
+                    text = fetch_and_extract(article_url)
+                    if not text or len(text) < 100:
+                        print(f" Contenido insuficiente: {article_url[:60]}...")
+                        continue
+                    
+                    try:
+                        title = link_element.text.strip()
+                        if not title:
+                            title = article_url.split("/")[-1].replace("-", " ").title()
+                    except:
+                        title = "France24 Article"
+                    
+                    if not title or len(title) < 10:
+                        continue
+                    
+                    repo.insert_link({"url": article_url})
+                    
+                    print(f" {title[:60]}...")
+                    
+                    yield {
+                        "title": title,
+                        "url": article_url,
+                        "text": text,
+                        "source": "france24-selenium",
+                        "scraped_at": datetime.now(timezone.utc),
+                    }
+                    
+                except Exception as e:
+                    print(f"  Error procesando artículo: {e}")
+                    continue
+            
+            time.sleep(2)
+                
+    finally:
+        driver.quit()
+
+def scrape_npr_selenium_stream() -> Iterable[Dict]:
+    """Scrape NPR using Selenium"""
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from webdriver_manager.chrome import ChromeDriverManager
+    import time
+    
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    
+    NPR_SECTIONS = {
+        "world": "https://www.npr.org/sections/world/",
+        "business": "https://www.npr.org/sections/business/",
+        "technology": "https://www.npr.org/sections/technology/",
+    }
+    
+    try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+    except Exception as e:
+        print(f"Error inicializando Selenium: {e}")
+        return
+    
+    try:
+        for category, section_url in NPR_SECTIONS.items():
+            print(f"\n📻 Scrapeando NPR - {category}...")
+            driver.get(section_url)
+            time.sleep(3)
+            
+            article_links = driver.find_elements(By.CSS_SELECTOR, "h2.title a")
+            if not article_links:
+                article_links = driver.find_elements(By.CSS_SELECTOR, "article h3 a")
+            
+            print(f"   Encontrados {len(article_links)} artículos en {category}")
+            
+            processed_urls = set()
+            
+            for link_element in article_links[:10]:
+                try:
+                    article_url = link_element.get_attribute("href")
+                    
+                    if not article_url or article_url in processed_urls:
+                        continue
+                    if "npr.org" not in article_url:
+                        continue
+                    
+                    processed_urls.add(article_url)
+                    
+                    if is_urls_processed_already(article_url):
+                        continue
+                    
+                    text = fetch_and_extract(article_url)
+                    if not text or len(text) < 100:
+                        continue
+                    
+                    try:
+                        title = link_element.text.strip()
+                        if not title:
+                            title = article_url.split("/")[-2].replace("-", " ").title()
+                    except:
+                        title = "NPR Article"
+                    
+                    if not title or len(title) < 10:
+                        continue
+                    
+                    repo.insert_link({"url": article_url})
+                    
+                    print(f"  {title[:60]}...")
+                    
+                    yield {
+                        "title": title,
+                        "url": article_url,
+                        "text": text,
+                        "source": "npr-selenium",
+                        "scraped_at": datetime.now(timezone.utc),
+                    }
+                    
+                except Exception as e:
+                    print(f"   Error procesando artículo: {e}")
+                    continue
+            
+            time.sleep(2)
+                
+    finally:
+        driver.quit()

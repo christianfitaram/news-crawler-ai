@@ -41,6 +41,23 @@ class ArticlesRepository:
 
     def count_articles(self, params: Dict[str, Any]) -> int:
         return self.collection.count_documents(params)
+    
+    def get_articles_grouped_by_source(self) -> Dict[str, List[Dict[str, Any]]]:
+        pipeline = [
+            {
+                "$group": {
+                    "_id": "$source",
+                    "articles": {"$push": "$$ROOT"}
+                }
+            }
+        ]
+        grouped_result = self.collection.aggregate(pipeline)
+        grouped_dict = {}
+        for group in grouped_result:
+            source = group["_id"]
+            articles = group["articles"]
+            grouped_dict[source] = articles
+        return grouped_dict
 
     def setup_indexes(self) -> None:
         name = self.collection.create_index([("isCleaned", 1), ("sample", 1)])
