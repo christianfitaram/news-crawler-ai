@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Dict, Iterable, cast
+from typing import Dict, Iterable, cast, Optional 
 
 import feedparser
 import requests
@@ -33,6 +33,71 @@ ELUNIVERSAL_ARTICLE_RE = re.compile(
     r"^https?://(www\.)?eluniversal\.com\.mx/.+/.+/?$",
     re.IGNORECASE,
 )
+
+BME_RSS_FEEDS = {
+    "press_releases": "https://www.bolsasymercados.es/es/sala-de-comunicacion/notas-de-prensa.rss.xml",
+    "news": "https://www.bolsasymercados.es/es/sala-de-comunicacion/noticias.rss.xml",
+    "reports": "https://www.bolsasymercados.es/es/estudios-y-publicaciones/reportajes.rss.xml",
+    "blog": "https://www.bolsasymercados.es/es/blog.rss.xml",
+}
+
+BME_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0 Safari/537.36"
+    ),
+    "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5",
+}
+
+def _fetch_rss_xml(url: str, timeout: int = 15) -> Optional[str]:
+    """Fetch RSS XML content via requests (more WAF-friendly than feedparser.parse(url))."""
+    try:
+        res = requests.get(url, headers=BME_HEADERS, timeout=timeout)
+        res.raise_for_status()
+        return res.text
+    except Exception as e:
+        print(f"[bme] Error fetching RSS {url}: {e}")
+        return None
+    
+def scrape_bme_stream() -> Iterable[Dict]:
+    seen_urls: set[str] = set()
+
+    for feed_key, feed_url in BME_RSS_FEEDS.items():
+        xml = _fetch_rss_xml(feed_url)
+        if not xml:
+            continue
+        feed = feedparser.parse(xml)
+        entries = getattr(feed, "entries", []) or []
+        for entry in entries:
+            url = (entry.get("link") or "").strip()
+            title = (entry.get("title") or "").strip()
+            if not url or not title:
+                continue
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            if is_urls_processed_already(url):
+                continue
+            text = fetch_and_extract(url)
+            if not text:
+                # fallback: resumen RSS (si existe)
+                text = (entry.get("summary") or "").strip()
+            if not text:
+                continue
+
+            try:
+                repo.insert_link({"url": url})
+            except Exception as e:
+                print(f"[bme] Warning inserting link: {e}")
+            yield {
+                "title": title,
+                "url": url,
+                "text": text,
+                "source": f"bme-{feed_key}",
+                "scraped_at": datetime.now(timezone.utc),
+            }
+
 
 def scrape_lanacion_stream() -> Iterable[Dict]:
     try:
