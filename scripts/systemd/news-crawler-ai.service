@@ -7,6 +7,8 @@ Wants=network-online.target
 Type=simple
 User=christianfita
 WorkingDirectory=/home/christianfita/apps/news-crawler-ai
+Environment=CHROME_BIN=/snap/bin/chromium
+Environment=CHROMEDRIVER_PATH=/usr/local/bin/chromedriver-143.0.7499.40
 EnvironmentFile=/home/christianfita/apps/news-crawler-ai/.env
 ExecStart=/home/christianfita/apps/news-crawler-ai/.venv/bin/python -m ingest.classifier
 Restart=on-failure
