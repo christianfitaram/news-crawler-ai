@@ -316,7 +316,7 @@ Your task:
 Text to rewrite:
 """ + prompt
 
-    api_url = "http://35.204.248.56:11434/api/generate"
+    api_url = "http://localhost:11434/api/generate"
 
     payload = {
         "model": "gpt-oss:20b",
