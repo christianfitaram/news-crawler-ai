@@ -83,6 +83,61 @@ DOGC_TITLE_BEST_KEYS = [
     "titol", "titulo", "title",
 ]
 
+BOE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0 Safari/537.36"
+    ),
+    "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5",
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+    "Referer": "https://www.boe.es/rss/",
+}
+
+BOE_RSS_FEEDS = {
+    "s1":  "https://www.boe.es/rss/boe.php?s=1",
+    "s2a": "https://www.boe.es/rss/boe.php?s=2A",
+    "s2b": "https://www.boe.es/rss/boe.php?s=2B",
+    "s3":  "https://www.boe.es/rss/boe.php?s=3",
+    "s4":  "https://www.boe.es/rss/boe.php?s=4",
+    "s5":  "https://www.boe.es/rss/boe.php?s=5",
+    "s5a": "https://www.boe.es/rss/boe.php?s=5A",
+    "s5b": "https://www.boe.es/rss/boe.php?s=5B",
+    "s5c": "https://www.boe.es/rss/boe.php?s=5C",
+}
+
+MAX_BOE_TEXT_CHARS = 12000  
+MAX_ITEMS_PER_FEED = 30     
+
+def _cap_text(s: str, max_chars: int = MAX_BOE_TEXT_CHARS) -> str:
+    s = re.sub(r"\s+", " ", (s or "")).strip()
+    return s[:max_chars]
+
+
+def fetch_boe_txt_fast(url: str, timeout: int = 20) -> Optional[str]:
+    """
+    Extrae texto del BOE txt.php evitando PDF/extractores genéricos.
+    Importante: devolvemos texto capado para no romper el summarizer.
+    """
+    try:
+        res = requests.get(url, headers=BOE_HEADERS, timeout=timeout)
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, "html.parser")
+        main = (
+            soup.select_one("main") or
+            soup.select_one("#contenido") or
+            soup.select_one("#content") or
+            soup
+        )
+        for tag in main.select("script, style, noscript, nav, header, footer, form"):
+            tag.decompose()
+        text = main.get_text(" ", strip=True)
+        return _cap_text(text)
+    except Exception as e:
+        print(f"[boe] Error fast fetching {url}: {e}")
+        return None
+
+
 def _looks_like_date(s: str) -> bool:
     return bool(_DATE_RX.match(s.strip()))
 
@@ -315,6 +370,73 @@ def scrape_dogc_stream(days_back: int = 30) -> Iterable[Dict]:
         else:
             pages_without_yield = 0
         offset += page_size
+
+def scrape_boe_stream(days_back: int = 7) -> Iterable[Dict]:
+    """
+    Scraper BOE por RSS.
+    - Filtra por fecha (published_parsed) y corta por days_back.
+    - Evita PDFs.
+    - Devuelve texto acotado (para que el summarizer no falle).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    seen_urls: set[str] = set()
+    for feed_key, feed_url in BOE_RSS_FEEDS.items():
+        xml = fetch_rss_xml(feed_url, headers=BOE_HEADERS, timeout=20, tag="boe")
+        if not xml:
+            continue
+        feed = feedparser.parse(xml)
+        entries = getattr(feed, "entries", []) or []
+        produced = 0
+        for entry in entries:
+            url = (entry.get("link") or "").strip()
+            title = (entry.get("title") or "").strip()
+            if not url or not title:
+                continue
+            # cutoff temporal (si el feed lo trae)
+            published_parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+            if published_parsed:
+                try:
+                    published_dt = datetime(*published_parsed[:6], tzinfo=timezone.utc)
+                    if published_dt < cutoff:
+                        break
+                except Exception:
+                    pass
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            if is_urls_processed_already(url):
+                continue
+            summary = (entry.get("summary") or "").strip()
+            text: Optional[str] = None
+            if "/diario_boe/txt.php" in url:
+                preview = fetch_boe_txt_fast(url)
+                # Monta un text “pipeline-friendly”: resumen + preview corto
+                if summary and preview:
+                    text = _cap_text(summary + "\n\n" + preview)
+                elif preview:
+                    text = preview
+                elif summary:
+                    text = _cap_text(summary)
+            else:
+                if summary:
+                    text = _cap_text(summary)
+            if not text:
+                continue
+            try:
+                repo.insert_link({"url": url})
+            except Exception as e:
+                print(f"[boe] Warning inserting link: {e}")
+            yield {
+                "title": title,
+                "url": url,
+                "text": text,                 # IMPORTANTE: siempre acotado
+                "source": f"boe-{feed_key}",
+                "scraped_at": datetime.now(timezone.utc),
+            }
+            produced += 1
+            if produced >= MAX_ITEMS_PER_FEED:
+                break
+
 
 def scrape_lanacion_stream() -> Iterable[Dict]:
     try:
