@@ -368,7 +368,6 @@ def scrape_guardian_selenium_stream() -> Iterable[Dict]:
                         
                         # Verificar si ya fue procesado en MongoDB
                         if is_urls_processed_already(article_url):
-                            print(f" Ya procesado: {article_url[:60]}...")
                             continue
                         
                         # Extraer contenido con trafilatura
@@ -472,7 +471,6 @@ def scrape_france24_selenium_stream() -> Iterable[Dict]:
                     processed_urls.add(article_url)
                     
                     if is_urls_processed_already(article_url):
-                        print(f"  Ya procesado: {article_url[:60]}...")
                         continue
                     
                     text = fetch_and_extract(article_url)

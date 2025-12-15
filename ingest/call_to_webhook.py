@@ -13,8 +13,8 @@ load_dotenv()
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY", "eyJAdminK3y-2025!zXt9fGHEMPLq4RsVm7DwuJXeb6u")
 WEBHOOK_SIGNATURE = os.getenv("WEBHOOK_SIGNATURE", NEWSAPI_KEY)
 
-DEFAULT_TIMEOUT = float(os.getenv("WEBHOOK_TIMEOUT", 30))
-FETCH_TIMEOUT = float(os.getenv("NEWS_FETCH_TIMEOUT", 10))
+DEFAULT_TIMEOUT = float(os.getenv("WEBHOOK_TIMEOUT", 60))
+FETCH_TIMEOUT = float(os.getenv("NEWS_FETCH_TIMEOUT", 20))
 
 
 def _build_session(total_retries: int = 3, backoff_factor: float = 0.5) -> requests.Session:
