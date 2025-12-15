@@ -21,7 +21,6 @@ from lib.repositories.metadata_repository import MetadataRepository
 from lib.repositories.global_metadata_repository import GlobalMetadataRepository
 import requests
 import uuid
-from google.genai import GenAIClient
 load_dotenv()
 
 CACHE_DIR_FROM_ENV = os.getenv('TRANSFORMERS_CACHE')
