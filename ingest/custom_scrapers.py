@@ -327,12 +327,12 @@ def scrape_guardian_selenium_stream() -> Iterable[Dict]:
     try:
         driver = build_chrome_driver(headless=True)
     except Exception as e:
-        print(f"Error inicializando Selenium: {e}")
+        print(f"Error initializing Selenium: {e}")
         return
     
     try:
         for category, section_url in GUARDIAN_SECTIONS.items():
-            print(f"\n📰 Scrapeando The Guardian - {category}...")
+            print(f"\n Scraping The Guardian - {category}...")
             
             try:
                 # Cargar la página
@@ -347,7 +347,7 @@ def scrape_guardian_selenium_stream() -> Iterable[Dict]:
                 if not article_links:
                     article_links = driver.find_elements(By.CSS_SELECTOR, "div.fc-item__container a")
                 
-                print(f"   Encontrados {len(article_links)} artículos en {category}")
+                print(f"   Found {len(article_links)} articles in {category}")
                 
                 # Procesar los primeros 10 artículos
                 processed_urls = set()
@@ -374,10 +374,10 @@ def scrape_guardian_selenium_stream() -> Iterable[Dict]:
                         text = fetch_and_extract(article_url)
                         
                         if not text or len(text) < 100:
-                            print(f" Contenido insuficiente: {article_url[:60]}...")
+                            print(f" Content insufficient: {article_url[:60]}...")
                             continue
                         
-                        # Extraer título del elemento o de la URL
+                        # Extract title from element or URL
                         try:
                             title = link_element.text.strip()
                             if not title:
@@ -405,13 +405,13 @@ def scrape_guardian_selenium_stream() -> Iterable[Dict]:
                         }
                         
                     except Exception as e:
-                        print(f"    Error procesando artículo: {e}")
+                        print(f"    Error processing article: {e}")
                         continue
                 
-                time.sleep(2)  # Pausa entre categorías
+                time.sleep(2)  # Pause between categories
                 
             except Exception as e:
-                print(f"Error scrapeando categoría {category}: {e}")
+                print(f"Error scrapping category {category}: {e}")
                 continue
                 
     finally:
@@ -434,12 +434,12 @@ def scrape_france24_selenium_stream() -> Iterable[Dict]:
     try:
         driver = build_chrome_driver(headless=True)
     except Exception as e:
-        print(f"Error inicializando Selenium: {e}")
+        print(f"Error initializing Selenium: {e}")
         return
     
     try:
         for category, section_url in FRANCE24_SECTIONS.items():
-            print(f"\n🇫🇷 Scrapeando France24 - {category}...")
+            print(f"\n Scrapping France24 - {category}...")
             driver.get(section_url)
             time.sleep(3)
             
@@ -450,7 +450,7 @@ def scrape_france24_selenium_stream() -> Iterable[Dict]:
             if not article_links:
                 article_links = driver.find_elements(By.CSS_SELECTOR, "h2 a")
             
-            print(f"   Encontrados {len(article_links)} artículos en {category}")
+            print(f"   Found {len(article_links)} articles in {category}")
             
             processed_urls = set()
             
@@ -475,7 +475,7 @@ def scrape_france24_selenium_stream() -> Iterable[Dict]:
                     
                     text = fetch_and_extract(article_url)
                     if not text or len(text) < 100:
-                        print(f" Contenido insuficiente: {article_url[:60]}...")
+                        print(f" Content insufficient: {article_url[:60]}...")
                         continue
                     
                     try:
@@ -501,7 +501,7 @@ def scrape_france24_selenium_stream() -> Iterable[Dict]:
                     }
                     
                 except Exception as e:
-                    print(f"  Error procesando artículo: {e}")
+                    print(f"  Error processing article: {e}")
                     continue
             
             time.sleep(2)
@@ -534,12 +534,12 @@ def scrape_npr_selenium_stream() -> Iterable[Dict]:
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=chrome_options)
     except Exception as e:
-        print(f"Error inicializando Selenium: {e}")
+        print(f"Error: {e}")
         return
     
     try:
         for category, section_url in NPR_SECTIONS.items():
-            print(f"\n📻 Scrapeando NPR - {category}...")
+            print(f"\n📻 Scrapping NPR - {category}...")
             driver.get(section_url)
             time.sleep(3)
             
@@ -547,7 +547,7 @@ def scrape_npr_selenium_stream() -> Iterable[Dict]:
             if not article_links:
                 article_links = driver.find_elements(By.CSS_SELECTOR, "article h3 a")
             
-            print(f"   Encontrados {len(article_links)} artículos en {category}")
+            print(f"   Found {len(article_links)} articles in {category}")
             
             processed_urls = set()
             

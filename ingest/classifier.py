@@ -19,6 +19,7 @@ from lib.repositories.articles_repository import ArticlesRepository
 from lib.repositories.link_pool_repository import LinkPoolRepository
 from lib.repositories.metadata_repository import MetadataRepository
 from lib.repositories.global_metadata_repository import GlobalMetadataRepository
+from ingest.spacy_demo import main as enrich_news_article_spacy_demo
 import requests
 import uuid
 load_dotenv()
@@ -240,7 +241,7 @@ def classify_articles():
             except Exception as e:
                 print(f"[{i}] ⚠️ Text cleaning failed: {e}, using original text")
                 text_cleaned = article.get("text", "")
-
+            entities_enriched = enrich_news_article_spacy_demo(article.get("title") + "\n" + summary + "\n" + text_cleaned)
             classified_article = {
                 "title": article.get("title"),
                 "url": article.get("url"),
@@ -255,6 +256,9 @@ def classify_articles():
                     "label": sentiment["label"],
                     "score": sentiment["score"]
                 },
+                "locations": entities_enriched.get("locations", []),
+                "organizations": entities_enriched.get("organizations", []),
+                "persons": entities_enriched.get("persons", []),
             }
             # set data for metadata
             num_well_classified += 1

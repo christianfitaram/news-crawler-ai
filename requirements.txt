@@ -34,3 +34,7 @@ selenium
 
 #AI 
 google-genai
+
+# Others
+spacy[transformers]>=3.7.2,<3.8
+en-core-web-trf @ https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.7.2/en_core_web_trf-3.7.2-py3-none-any.whl
