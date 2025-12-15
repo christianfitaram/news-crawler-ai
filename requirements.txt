@@ -18,17 +18,15 @@ pymongo~=4.15.0
 numpy>=1.23,<2.0
 
 # NLP / ML
-transformers~=4.56.1
+transformers>=4.30,<4.37
 
 # PyTorch (CPU wheel from the official index to avoid CUDA deps/backtracking)
---extra-index-url https://download.pytorch.org/whl/cu121
+--extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.2.2
 
 # accelerate
 # sentencepiece
-safetensors
-
-dotenv~=0.9.9
+safetensors==0.4.3
 requests~=2.32.5
 feedparser~=6.0.12
 selenium==4.27.1
@@ -39,5 +37,5 @@ websocket-client==1.8.0
 
 
 # Others
-spacy[transformers]>=3.7.2,<3.8
+spacy[transformers]==3.7.2
 en-core-web-trf @ https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.7.2/en_core_web_trf-3.7.2-py3-none-any.whl
