@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Dict, Iterable, cast, Optional 
-
+import json 
 import feedparser
 import requests
 from bs4 import BeautifulSoup
 import re
+from datetime import datetime, timedelta, timezone
 from ingest.crawler_dw import main as crawler_dw
 from ingest.utils import is_urls_processed_already, fetch_and_extract
 from lib.repositories.link_pool_repository import LinkPoolRepository
@@ -20,13 +21,10 @@ BLOOMBERG_RSS_FEEDS = {
     "wealth": "https://feeds.bloomberg.com/wealth/news.rss",
 }
 
-
-
 LANACION_BASE_URL = "https://www.lanacion.com.ar/ultimas-noticias/"
 LANACION_ARTICLE_RE = re.compile(
     r"^https?://(www\.)?lanacion\.com\.ar/.+-nid\d+/?$"
 )
-
 
 ELUNIVERSAL_BASE_URL = "https://www.eluniversal.com.mx/"
 ELUNIVERSAL_ARTICLE_RE = re.compile(
@@ -50,21 +48,130 @@ BME_HEADERS = {
     "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5",
 }
 
-def _fetch_rss_xml(url: str, timeout: int = 15) -> Optional[str]:
-    """Fetch RSS XML content via requests (more WAF-friendly than feedparser.parse(url))."""
+
+DOGC_DATASET_ID = "n6hn-rmy7"  # Normativa del DOGC i Portal Jurídic (Open Data)
+DOGC_RESOURCE_JSON = f"https://analisi.transparenciacatalunya.cat/resource/{DOGC_DATASET_ID}.json"
+DOGC_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0 Safari/537.36"
+    ),
+    "Accept": "application/json,text/plain,*/*",
+}
+DOGC_TITLE_KEYS = [
+    "titol", "titulo", "title",
+    "titol_norma", "titol_disposicio", "titol_disposicio_normativa",
+    "denominacio", "denominacion",
+]
+DOGC_RANG_KEYS = ["rang_de_norma", "rang_norma", "tipus", "tipus_norma"]
+DOGC_NUM_KEYS = ["numero_de_control", "n_mero_de_control", "num_control", "numero_control"]
+DOGC_DATE_KEYS = [
+    "data_publicacio", "data_publication",
+    "data_disposicio", "data",
+    "data_de_publicacio",
+]
+_DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}") 
+DOGC_TITLE_BEST_KEYS = [
+    "t_tol_de_la_norma",
+    "titol_de_la_norma",
+    "títol_de_la_norma",
+
+    "descripcio", "descripcion", "description",
+    "resum", "resumen", "summary",
+
+    "titol", "titulo", "title",
+]
+
+def _looks_like_date(s: str) -> bool:
+    return bool(_DATE_RX.match(s.strip()))
+
+def detect_order_field(rows: list[dict]) -> Optional[str]:
+    """
+    Busca en las primeras filas un campo que parezca fecha (YYYY-MM-DD...).
+    Devuelve el nombre de columna más probable.
+    """
+    scores: dict[str, int] = {}
+    for row in rows[:10]:
+        for k, v in row.items():
+            s = _as_text(v)
+            if s and _looks_like_date(s):
+                scores[k] = scores.get(k, 0) + 1
+    if not scores:
+        return None
+    return max(scores, key=scores.get)
+
+def get_row_date(row: dict, date_field: str) -> Optional[datetime]:
+    s = _as_text(row.get(date_field))
+    if not s:
+        return None
     try:
-        res = requests.get(url, headers=BME_HEADERS, timeout=timeout)
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:
+        try:
+            return datetime.strptime(s[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+def build_dogc_title(row: dict) -> str:
+    t = _pick_first(row, DOGC_TITLE_BEST_KEYS)
+    if t:
+        return t
+    rang = _pick_first(row, ["rang_de_norma", "rang_norma", "tipus", "tipus_norma"]) or "Norma"
+    num = _pick_first(row, ["numero_de_control", "n_mero_de_control", "num_control", "numero_control"]) or ""
+    date = _pick_first(row, ["data_del_document", "data_publicacio", "data_disposicio", "data"]) or ""
+    title = " ".join(x for x in [rang, num, date] if x).strip()
+    return title if title else "DOGC (normativa)"
+
+def _normalize_dogc_url(v: str) -> Optional[str]:
+    v = v.strip()
+    if not v:
+        return None
+    if v.startswith("http://") or v.startswith("https://"):
+        return v
+    if v.startswith("eli/") or v.startswith("/eli/"):
+        return "https://portaljuridic.gencat.cat/" + v.lstrip("/")
+    if v.startswith("portaljuridic.gencat.cat/") or v.startswith("dogc.gencat.cat/"):
+        return "https://" + v
+    if "documentId=" in v and "dogc.gencat.cat" in v:
+        return "https://" + v.lstrip("/")
+    return None
+
+def _find_any_url(row: dict) -> Optional[str]:
+    for k, v in row.items():
+        lk = str(k).lower()
+        if any(tok in lk for tok in ["url", "enlla", "enllac", "link", "eli", "uri"]):
+            s = _as_text(v) 
+            if s:
+                u = _normalize_dogc_url(s)
+                if u:
+                    return u
+    for v in row.values():
+        s = _as_text(v)
+        if s and s.startswith(("http://", "https://", "eli/", "/eli/", "portaljuridic.gencat.cat/", "dogc.gencat.cat/")):
+            u = _normalize_dogc_url(s)
+            if u:
+                return u
+    doc_id = row.get("documentId") or row.get("documentid") or row.get("id_document")
+    doc_s = _as_text(doc_id)
+    if doc_s and doc_s.isdigit():
+        return f"https://dogc.gencat.cat/ca/document-del-dogc/?documentId={doc_s}"
+    return None
+
+def fetch_rss_xml(url: str, headers: dict, timeout: int = 15, tag: str = "rss") -> Optional[str]:
+    try:
+        res = requests.get(url, headers=headers, timeout=timeout)
         res.raise_for_status()
         return res.text
     except Exception as e:
-        print(f"[bme] Error fetching RSS {url}: {e}")
+        print(f"[{tag}] Error fetching RSS {url}: {e}")
         return None
-    
+
 def scrape_bme_stream() -> Iterable[Dict]:
     seen_urls: set[str] = set()
 
     for feed_key, feed_url in BME_RSS_FEEDS.items():
-        xml = _fetch_rss_xml(feed_url)
+        xml = fetch_rss_xml(feed_url, headers=BME_HEADERS, timeout=15, tag="bme")
         if not xml:
             continue
         feed = feedparser.parse(xml)
@@ -98,6 +205,116 @@ def scrape_bme_stream() -> Iterable[Dict]:
                 "scraped_at": datetime.now(timezone.utc),
             }
 
+
+def fetch_dogc_resource_json(limit: int = 50, offset: int = 0, timeout: int = 25,order_by: Optional[str] = None,) -> Optional[list[dict]]:
+    params = {
+        "$limit": str(limit),
+        "$offset": str(offset),
+    }
+    if order_by:
+        params["$order"] = f"{order_by} DESC"
+    try:
+        res = requests.get(DOGC_RESOURCE_JSON, headers=DOGC_HEADERS, params=params, timeout=timeout)
+        res.raise_for_status()
+        data = res.json()
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"[dogc] Error fetching resource json: {e}")
+        return None
+
+def _as_text(v) -> Optional[str]:
+    """Normaliza valores devueltos por Socrata: str o dict tipo URL."""
+    if isinstance(v, str):
+        s = v.strip()
+        return s if s else None
+    # Socrata URL datatype: {"url": "...", "description": "..."}
+    if isinstance(v, dict):
+        u = v.get("url")
+        if isinstance(u, str) and u.strip():
+            return u.strip()
+        # otros posibles nombres por si acaso
+        href = v.get("href")
+        if isinstance(href, str) and href.strip():
+            return href.strip()
+    return None
+
+
+def _pick_first(row: dict, candidates: list[str]) -> Optional[str]:
+    for k in candidates:
+        s = _as_text(row.get(k))
+        if s:
+            return s
+    return None
+
+def scrape_dogc_stream(days_back: int = 30) -> Iterable[Dict]:
+    seen_urls: set[str] = set()
+    page_size = 50
+    offset = 0
+    pages_without_yield = 0
+    max_pages_without_yield = 5
+    order_field: Optional[str] = None
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    while True:
+        print(f"[dogc] fetching $limit={page_size} $offset={offset} order={order_field}", flush=True)
+        rows = fetch_dogc_resource_json(limit=page_size, offset=offset, order_by=order_field)
+        if not rows:
+            break
+        if order_field is None:
+            order_field = detect_order_field(rows)
+            if order_field:
+                rows = fetch_dogc_resource_json(limit=page_size, offset=0, order_by=order_field) or rows
+                offset = 0
+                print(f"[dogc] detected order_field={order_field}", flush=True)
+        yielded_before_page = 0
+        for row in rows:
+            if order_field:
+                dt = get_row_date(row, order_field)
+                if dt and dt < cutoff:
+                    print(f"[dogc] stopping by cutoff ({days_back}d). row_date={dt.isoformat()}", flush=True)
+                    return
+            url = _find_any_url(row)
+            if not url:
+                continue
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            if is_urls_processed_already(url):
+                continue
+            title = build_dogc_title(row)
+            lead = _pick_first(
+                row,
+                [
+                    "t_tol_de_la_norma",
+                    "resumen",
+                    "resum",
+                    "summary",
+                    "descripcion",
+                    "descripcio",
+                ],
+            ) or ""
+            raw = json.dumps(row, ensure_ascii=False)
+            text = (lead + "\n\n" + raw).strip()
+            try:
+                repo.insert_link({"url": url})
+            except Exception as e:
+                print(f"[dogc] Warning inserting link: {e}")
+            yielded_before_page += 1
+            yield {
+                "title": title,
+                "url": url,
+                "text": text,
+                "source": "dogc-open-data",
+                "scraped_at": datetime.now(timezone.utc),
+            }
+        if yielded_before_page == 0:
+            pages_without_yield += 1
+            print(f"[dogc] page produced 0 items ({pages_without_yield}/{max_pages_without_yield})", flush=True)
+            if pages_without_yield >= max_pages_without_yield:
+                print("[dogc] stopping: no new items in consecutive pages", flush=True)
+                break
+        else:
+            pages_without_yield = 0
+        offset += page_size
 
 def scrape_lanacion_stream() -> Iterable[Dict]:
     try:
