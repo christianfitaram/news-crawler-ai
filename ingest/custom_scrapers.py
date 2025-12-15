@@ -1,6 +1,7 @@
 # pipeline_sample/custom_scrapers.py
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Dict, Iterable, cast
 
@@ -19,6 +20,38 @@ BLOOMBERG_RSS_FEEDS = {
     "technology": "https://feeds.bloomberg.com/technology/news.rss",
     "wealth": "https://feeds.bloomberg.com/wealth/news.rss",
 }
+
+
+def build_chrome_driver(headless: bool = True):
+    """Create a Chrome driver with safe defaults for headless/systemd environments."""
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from webdriver_manager.chrome import ChromeDriverManager
+
+    chrome_options = Options()
+    if headless:
+        # "new" flag for modern versions; older Chrome ignores it.
+        chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--remote-debugging-port=9222")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    )
+    # Persist user data to a writable location to avoid DevTools port issues.
+    user_data_dir = os.getenv("CHROME_USER_DATA_DIR", "/tmp/chrome-user-data")
+    chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
+
+    # Allow overriding the Chrome binary and driver version via env.
+    chrome_bin = os.getenv("CHROME_BIN")
+    if chrome_bin:
+        chrome_options.binary_location = chrome_bin
+    driver_version = os.getenv("CHROMEDRIVER_VERSION")
+    service = Service(ChromeDriverManager(version=driver_version).install())
+    return webdriver.Chrome(service=service, options=chrome_options)
 
 
 def get_title_from_dw_url(url: str) -> str:
@@ -267,22 +300,10 @@ def scrape_reuters_stream() -> Iterable[Dict]:
             }
 def scrape_guardian_selenium_stream() -> Iterable[Dict]:
     """Scrape The Guardian using Selenium for dynamic content"""
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
-    from webdriver_manager.chrome import ChromeDriverManager
     import time
-    
-    # Configurar opciones de Chrome
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")  # Ejecutar sin interfaz gráfica
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
     
     GUARDIAN_SECTIONS = {
         "world": "https://www.theguardian.com/world",
@@ -294,8 +315,7 @@ def scrape_guardian_selenium_stream() -> Iterable[Dict]:
     
     # Inicializar el driver
     try:
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver = build_chrome_driver(headless=True)
     except Exception as e:
         print(f"Error inicializando Selenium: {e}")
         return
@@ -390,18 +410,8 @@ def scrape_guardian_selenium_stream() -> Iterable[Dict]:
 
 def scrape_france24_selenium_stream() -> Iterable[Dict]:
     """Scrape France24 using Selenium"""
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.common.by import By
-    from webdriver_manager.chrome import ChromeDriverManager
     import time
-    
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
     
     FRANCE24_SECTIONS = {
         "world": "https://www.france24.com/en/",
@@ -413,8 +423,7 @@ def scrape_france24_selenium_stream() -> Iterable[Dict]:
     }
     
     try:
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver = build_chrome_driver(headless=True)
     except Exception as e:
         print(f"Error inicializando Selenium: {e}")
         return
