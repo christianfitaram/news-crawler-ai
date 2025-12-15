@@ -89,7 +89,7 @@ def send_to_webhook_to_embedding(insert_id, webhook_url=None):
             "X-Signature": WEBHOOK_SIGNATURE,
         }
 
-        target_url = webhook_url or os.getenv("WEBHOOK_URL", "http://localhost:8080/webhook/news")
+        target_url = webhook_url or os.getenv("WEBHOOK_URL", "http://localhost:8000/webhook/news")
         return _post_json(target_url, payload, headers, timeout=DEFAULT_TIMEOUT)
 
     except requests.exceptions.RequestException as e:

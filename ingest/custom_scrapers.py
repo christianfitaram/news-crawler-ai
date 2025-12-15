@@ -45,12 +45,22 @@ def build_chrome_driver(headless: bool = True):
     user_data_dir = os.getenv("CHROME_USER_DATA_DIR", "/tmp/chrome-user-data")
     chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
 
-    # Allow overriding the Chrome binary and driver version via env.
+    # Allow overriding the Chrome binary, driver path, or version via env.
     chrome_bin = os.getenv("CHROME_BIN")
     if chrome_bin:
         chrome_options.binary_location = chrome_bin
-    driver_version = os.getenv("CHROMEDRIVER_VERSION")
-    service = Service(ChromeDriverManager(version=driver_version).install())
+
+    driver_path = os.getenv("CHROMEDRIVER_PATH")
+    if driver_path:
+        service = Service(driver_path)
+    else:
+        driver_version = os.getenv("CHROMEDRIVER_VERSION")
+        try:
+            service = Service(ChromeDriverManager(version=driver_version).install())
+        except TypeError:
+            # Older webdriver_manager versions don't accept 'version'; ignore it.
+            service = Service(ChromeDriverManager().install())
+
     return webdriver.Chrome(service=service, options=chrome_options)
 
 
