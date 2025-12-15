@@ -29,11 +29,12 @@ dotenv~=0.9.9
 torch~=2.2.2
 requests~=2.32.5
 feedparser~=6.0.12
-webdriver-manager
-selenium
+selenium==4.27.1
+webdriver-manager==4.0.2
+urllib3[socks]==2.4.0
+typing-extensions==4.9.0
+websocket-client==1.8.0
 
-#AI 
-google-genai
 
 # Others
 spacy[transformers]>=3.7.2,<3.8
