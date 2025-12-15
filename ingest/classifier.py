@@ -21,9 +21,7 @@ from lib.repositories.metadata_repository import MetadataRepository
 from lib.repositories.global_metadata_repository import GlobalMetadataRepository
 import requests
 import uuid
-from google import genai
-
-client = genai.Client()
+from google.genai import GenAIClient
 load_dotenv()
 
 CACHE_DIR_FROM_ENV = os.getenv('TRANSFORMERS_CACHE')
@@ -337,25 +335,6 @@ Text to rewrite:
     except requests.exceptions.RequestException as e:
         print(f"GPT API error: {e}, using original text")
         return prompt  # Return original text as fallback
-
-def call_to_genai_api(prompt: str, timeout: int = 60) -> str:
-    prompt_final = """You are a professional text cleaner.
-Your task:
-- Remove any reference to news outlets, authors, publication names, URLs, or web layout artifacts.
-- Discard malformed, incomplete, or irrelevant fragments.
-- Do not include explanations, comments, or formatting — only return the clean text.
-Text to rewrite:""" + prompt
-    
-    try:
-        response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt_final,
-        )
-        return response.text.strip()
-    except Exception as e:
-        print(f"GenAI API error: {e}, using original text")
-        return prompt  # Return original text as fallback                           
-
 
 def add_one_to_total_articles_in_documents():
     selector = {"_id": ObjectId("6923b800f3d19f7c28f53a6d")}
