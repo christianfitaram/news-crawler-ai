@@ -20,13 +20,15 @@ numpy>=1.23,<2.0
 # NLP / ML
 transformers~=4.56.1
 
-# torch
+# PyTorch (CPU wheel from the official index to avoid CUDA deps/backtracking)
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.2.2
+
 # accelerate
 # sentencepiece
 safetensors
 
 dotenv~=0.9.9
-torch~=2.2.2
 requests~=2.32.5
 feedparser~=6.0.12
 selenium==4.27.1
