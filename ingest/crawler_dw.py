@@ -2,319 +2,233 @@
 """
 selenium_dw_extract_links.py
 
-- Requires: selenium, webdriver-manager
-- Purpose: Open DW top-stories page, dismiss cookie modal, extract article links, save CSV/JSON.
+- Requires: selenium
+- Purpose: Open DW top-stories page, dismiss cookie modal, extract article links.
 """
 
-import os
 import os
 import shutil
 import time
 import re
+import tempfile
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
     StaleElementReferenceException,
-    TimeoutException,
 )
 from selenium.webdriver.support.ui import WebDriverWait
+
 from webdriver_manager.chrome import ChromeDriverManager
 
 
 DW_URL = "https://www.dw.com/en/top-stories/s-9097"
 
-
-# Patterns to match article links we care about (DW english articles/videos/dossiers)
+# ----------------------------
+# Link patterns
+# ----------------------------
 LINK_PATTERNS = [
     r"^https?://(www\.)?dw\.com/en/.+/(a|video|g)-\d+",
-    r"^https?://(www\.)?dw\.com/en/.+/(a|video|g)-[A-Za-z0-9\-]+",  # catch other forms
+    r"^https?://(www\.)?dw\.com/en/.+/(a|video|g)-[A-Za-z0-9\-]+",
     r"^/en/.+/(a|video|g)-\d+",
     r"^/en/.+/(a|video|g)-[A-Za-z0-9\-]+",
 ]
 
-# Some localized accept texts to try (lowercase comparisons)
+# ----------------------------
+# Cookie handling
+# ----------------------------
 ACCEPT_TEXTS = [
-    "accept", "accept all", "i accept", "i agree", "agree", "ok", "accept cookies","Yes,I Accept",
-    "allow", "allow all",
-    # Spanish / Portuguese
-    "aceptar", "acepto", "aceitar",
-    # German / French
-    "zustimmen", "einverstanden", "akzeptieren", "accepter",
-    # short variants
-    "cookie settings", "cookies", "allow all",
+    "accept", "accept all", "agree", "ok", "allow",
+    "aceptar", "aceitar",
+    "zustimmen", "akzeptieren", "accepter",
 ]
 
-# A more permissive CSS/XPath selection that often contains cookie accept buttons
 COOKIE_BUTTON_XPATHS = [
-    # typical buttons with text
-    "//button[normalize-space()!='' and (contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'agree') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'acept') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'aceitar') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'zustimmen') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'akzeptier') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accepter') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'ok') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'allow') )]",
-    # look for inputs
-    "//input[@type='button' or @type='submit' and (contains(translate(@value, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept') or contains(translate(@value, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'agree'))]",
-    # aria labelled cookie/consent
-    "//button[contains(@aria-label, 'cookie') or contains(@aria-label, 'consent') or contains(@title, 'cookie') or contains(@title, 'consent')]",
-    # generic selectors
-    "//button[contains(@class,'cookie') or contains(@class,'consent') or contains(@class,'accept') or contains(@id,'cookie') or contains(@id,'consent')]",
+    "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept')]",
+    "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'agree')]",
+    "//button[contains(@class,'cookie') or contains(@id,'cookie')]",
 ]
-
 
 CHROME_BINARY_ENV = "CHROME_BINARY"
 CHROMEDRIVER_ENV = "CHROMEDRIVER_PATH"
 
 
+# ----------------------------
+# Chrome resolution
+# ----------------------------
 def _resolve_chrome_binary():
-    """Return a Chrome binary path, honoring overrides for custom installations."""
     env_path = os.getenv(CHROME_BINARY_ENV)
-    if env_path:
-        env_path = env_path.strip()
-        if os.path.exists(env_path):
-            print(f"[chrome] Using env CHROME_BINARY={env_path}")
-            return env_path
+    if env_path and os.path.exists(env_path):
+        print(f"[chrome] Using env CHROME_BINARY={env_path}")
+        return env_path
 
     candidates = [
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable",
-        "/usr/bin/chromium-browser",
+        "/snap/bin/chromium",
         "/usr/bin/chromium",
-        shutil.which("google-chrome"),
-        shutil.which("google-chrome-stable"),
-        shutil.which("chromium-browser"),
+        "/usr/bin/chromium-browser",
         shutil.which("chromium"),
+        shutil.which("chromium-browser"),
     ]
-    for candidate in candidates:
-        if candidate and os.path.exists(candidate):
-            print(f"[chrome] Using detected browser binary: {candidate}")
-            return candidate
+    for c in candidates:
+        if c and os.path.exists(c):
+            print(f"[chrome] Using detected browser binary: {c}")
+            return c
 
-    raise RuntimeError(
-        "Chrome/Chromium binary not found. Install google-chrome or chromium, "
-        f"or set {CHROME_BINARY_ENV}=/full/path/to/chrome before running this crawler."
-    )
-
+    raise RuntimeError("Chrome/Chromium binary not found")
 
 
 def _resolve_chromedriver_path():
-    """Return a chromedriver path, preferring system chromedriver for Chromium."""
-    # 1) Env override (if you ever want custom path)
     env_path = os.getenv(CHROMEDRIVER_ENV)
-    if env_path:
-        env_path = env_path.strip()
-        if os.path.exists(env_path):
-            print(f"[chromedriver] Using env CHROMEDRIVER_PATH={env_path}")
-            return env_path
-        raise RuntimeError(
-            f"{CHROMEDRIVER_ENV} is set to '{env_path}' but the file does not exist."
-        )
+    if env_path and os.path.exists(env_path):
+        print(f"[chromedriver] Using env CHROMEDRIVER_PATH={env_path}")
+        return env_path
 
-    # 2) Try system chromedriver installed via apt
-    system_candidates = [
-        "/usr/lib/chromium-browser/chromedriver",
-        "/usr/bin/chromedriver",
-        shutil.which("chromedriver"),
-    ]
-    for c in system_candidates:
+    for c in ["/usr/bin/chromedriver", shutil.which("chromedriver")]:
         if c and os.path.exists(c):
             print(f"[chromedriver] Using system chromedriver at: {c}")
             return c
 
-    # 3) Fallback: webdriver-manager (downloads matching Chrome driver)
-    print("[chromedriver] System chromedriver not found, using webdriver-manager...")
+    print("[chromedriver] Falling back to webdriver-manager")
     return ChromeDriverManager().install()
 
 
+# ----------------------------
+# Profile dir (snap-safe)
+# ----------------------------
+def _make_profile_dir():
+    base = os.path.expanduser("~/snap/chromium/common/selenium-profiles")
+    os.makedirs(base, exist_ok=True)
+    return tempfile.mkdtemp(prefix="dw-", dir=base)
 
+
+# ----------------------------
+# Driver builder (FIXED)
+# ----------------------------
 def build_driver(headless=True):
     options = webdriver.ChromeOptions()
     options.binary_location = _resolve_chrome_binary()
+
     if headless:
-        # use new-headless mode when available
         options.add_argument("--headless=new")
     else:
         options.add_argument("--start-maximized")
+
+    # REQUIRED for servers / snap
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--remote-debugging-port=0")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument("--single-process")
+
+    # ❌ DO NOT USE --single-process (causes DevToolsActivePort crashes)
+
+    profile_dir = _make_profile_dir()
+    options.add_argument(f"--user-data-dir={profile_dir}")
+
     options.add_argument(
-        "user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120 Safari/537.36"
+        "user-agent=Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143 Safari/537.36"
     )
 
     driver_path = _resolve_chromedriver_path()
-    print(f"[driver] Starting Chrome with binary={options.binary_location} "
-          f"and chromedriver={driver_path}")
+    print(
+        f"[driver] Starting Chrome with binary={options.binary_location} "
+        f"chromedriver={driver_path} profile={profile_dir}"
+    )
+
     try:
         driver = webdriver.Chrome(service=Service(driver_path), options=options)
-        return driver
-    except Exception as e:
-        # Surface a clear message so systemd logs show why Selenium failed
-        print(f"[driver][error] Failed to start Chrome driver. "
-              f"binary={options.binary_location} chromedriver={driver_path} error={e}")
+        driver.set_page_load_timeout(30)
+        driver.set_script_timeout(30)
+        return driver, profile_dir
+    except Exception:
+        shutil.rmtree(profile_dir, ignore_errors=True)
         raise
 
 
-def try_click(element):
+# ----------------------------
+# Cookie dismissal
+# ----------------------------
+def try_click(el):
     try:
-        element.click()
+        el.click()
         return True
     except (ElementClickInterceptedException, StaleElementReferenceException):
         try:
-            # fallback JS click
-            element._parent.execute_script("arguments[0].click();", element)
+            el._parent.execute_script("arguments[0].click();", el)
             return True
         except Exception:
             return False
 
-def dismiss_cookie_modal(driver, timeout=10):
-    wait = WebDriverWait(driver, timeout)
-    # 1) Wait a bit for any modal to appear
-    time.sleep(1.0)
-    # 2) Try iframe-based cookie banners (common pattern)
-    iframes = driver.find_elements(By.TAG_NAME, "iframe")
-    for idx, iframe in enumerate(iframes):
-        try:
-            # only attempt if iframe is visible & likely related
-            src = iframe.get_attribute("src") or ""
-            title = iframe.get_attribute("title") or ""
-            # Heuristics: cookie / consent / cookiebot / usercentrics often in src/title
-            if any(k in src.lower() for k in ("cookie", "consent", "usercentrics", "cookiehub", "optanon")) or any(k in title.lower() for k in ("cookie", "consent")):
-                try:
-                    driver.switch_to.frame(iframe)
-                    # try xpath buttons inside this frame
-                    for xpath in COOKIE_BUTTON_XPATHS:
-                        elems = driver.find_elements(By.XPATH, xpath)
-                        for el in elems:
-                            txt = (el.text or el.get_attribute("value") or "").strip().lower()
-                            if any(tok in txt for tok in ACCEPT_TEXTS) or True:
-                                if try_click(el):
-                                    time.sleep(0.6)
-                                    driver.switch_to.default_content()
-                                    return True
-                    driver.switch_to.default_content()
-                except Exception:
-                    driver.switch_to.default_content()
-                    continue
-        except Exception:
-            continue
 
-    # 3) Try common cookie banners in main DOM
+def dismiss_cookie_modal(driver):
+    time.sleep(1)
     for xpath in COOKIE_BUTTON_XPATHS:
-        try:
-            candidates = driver.find_elements(By.XPATH, xpath)
-            for el in candidates:
-                txt = (el.text or el.get_attribute("value") or el.get_attribute("aria-label") or "").strip().lower()
-                # click if text matches our accept words, or as fallback click the first visible candidate
-                if txt:
-                    if any(tok in txt for tok in ACCEPT_TEXTS):
-                        if try_click(el):
-                            time.sleep(0.6)
-                            return True
-                else:
-                    # fallback: click if visible
-                    if el.is_displayed():
-                        if try_click(el):
-                            time.sleep(0.6)
-                            return True
-        except Exception:
-            continue
-
-    # 4) Try dismissing banners via JS: remove elements that look like cookie banners
-    try:
-        script = r'''
-        (() => {
-          const keywords = ['cookie', 'consent', 'eu-cookie', 'cookie-banner', 'usercentrics', 'onetrust', 'optanon', 'cookiebot', 'cookieconsent'];
-          let removed = 0;
-          for (const el of Array.from(document.querySelectorAll('div,section,aside,dialog'))) {
-            const cls = (el.className || '').toLowerCase();
-            const id = (el.id || '').toLowerCase();
-            const text = (el.innerText || '').toLowerCase().slice(0, 400);
-            if (keywords.some(k => cls.includes(k) || id.includes(k) || text.includes(k))) {
-              el.style.display = 'none';
-              removed += 1;
-            }
-          }
-          return removed;
-        })();
-        '''
-        removed = driver.execute_script(script)
-        if removed and int(removed) > 0:
-            # small wait and return true (we removed banner)
-            time.sleep(0.4)
-            return True
-    except Exception:
-        pass
-
-    # 5) If nothing worked, return False
+        for el in driver.find_elements(By.XPATH, xpath):
+            txt = (el.text or "").lower()
+            if any(k in txt for k in ACCEPT_TEXTS) and el.is_displayed():
+                if try_click(el):
+                    time.sleep(0.5)
+                    return True
     return False
 
+
+# ----------------------------
+# Link extraction
+# ----------------------------
 def extract_links_from_page(driver):
-    anchors = driver.find_elements(By.TAG_NAME, "a")
     links = set()
-    for a in anchors:
-        try:
-            href = a.get_attribute("href")
-            if not href:
-                continue
-            href = href.strip()
-            # normalize relative links that start with /en/...
-            if href.startswith("/"):
-                href = "https://www.dw.com" + href
-            # filter via regex patterns
-            for pat in LINK_PATTERNS:
-                if re.search(pat, href):
-                    links.add(href)
-                    break
-        except Exception:
+    for a in driver.find_elements(By.TAG_NAME, "a"):
+        href = a.get_attribute("href")
+        if not href:
             continue
-    # Also attempt to find links inside data attributes or JSON-LD (fallback)
-    # (optional: not implemented here)
+        href = href.strip()
+        if href.startswith("/"):
+            href = "https://www.dw.com" + href
+        for pat in LINK_PATTERNS:
+            if re.search(pat, href):
+                links.add(href)
+                break
     return sorted(links)
 
+
+# ----------------------------
+# Main
+# ----------------------------
 def main(headless=True):
     try:
-        driver = build_driver(headless=headless)
+        driver, profile_dir = build_driver(headless=headless)
     except Exception as e:
-        # If driver cannot start (missing chrome/chromedriver), skip DW to avoid crashing pipeline.
-        print(f"[crawler_dw][fatal] Cannot start Selenium driver: {e}. "
-              f"Set {CHROME_BINARY_ENV} and {CHROMEDRIVER_ENV} or install Chrome/chromedriver.")
+        print(f"[crawler_dw][fatal] Cannot start Selenium driver: {e}")
         return []
+
     try:
-        print("[*] opening page:", DW_URL)
+        print("[*] Opening:", DW_URL)
         driver.get(DW_URL)
-        # let page load and JS run
-        time.sleep(2.0)
+        time.sleep(2)
 
-        print("[*] attempting to dismiss cookie modal...")
-        ok = dismiss_cookie_modal(driver, timeout=8)
-        print("[*] cookie modal dismissed?" , ok)
+        print("[*] Dismissing cookie modal...")
+        dismiss_cookie_modal(driver)
 
-        # Additional wait for dynamic content to fully load after dismissal
-        time.sleep(1.0)
-
-        # maybe load more content by scrolling
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight/3);")
-        time.sleep(0.6)
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(0.6)
+        time.sleep(1)
 
-        # extract
         links = extract_links_from_page(driver)
-        print(f"[*] found {len(links)} matching links.")
-        print(links)
-        # Print sample
-        for i, l in enumerate(links):
-            if i >= 50:
-                break
+        print(f"[*] Found {len(links)} links")
+
+        for l in links[:30]:
             print(l)
-        return list(links)
+
+        return links
 
     finally:
-        driver.quit()
+        try:
+            driver.quit()
+        finally:
+            shutil.rmtree(profile_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
-    # change headless=False for debugging with a browser window
     main(headless=True)
