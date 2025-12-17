@@ -19,7 +19,6 @@ from lib.repositories.articles_repository import ArticlesRepository
 from lib.repositories.link_pool_repository import LinkPoolRepository
 from lib.repositories.metadata_repository import MetadataRepository
 from lib.repositories.global_metadata_repository import GlobalMetadataRepository
-from ingest.spacy_demo import main as enrich_news_article_spacy_demo
 import requests
 import json
 import uuid
@@ -248,11 +247,8 @@ def classify_articles():
                     "persons": [],
                 }
             text_cleaned = gpt_result.get("cleaned_text", article.get("text", ""))
-            entities_enriched = None
             if not (gpt_result.get("locations") or gpt_result.get("organizations") or gpt_result.get("persons")):
-                entities_enriched = enrich_news_article_spacy_demo(
-                    article.get("title") + "\n" + summary + "\n" + text_cleaned
-                )
+                entities_enriched = None
             classified_article = {
                 "title": article.get("title"),
                 "url": article.get("url"),
