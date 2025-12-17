@@ -238,6 +238,7 @@ def classify_articles():
             sentiment = sentiment_pipeline(summary)[0]
             try:
                 gpt_result = call_to_gpt_api(article.get("text"), timeout=60)  # 60 second timeout
+                print(gpt_result)
             except Exception as e:
                 print(f"[{i}] ⚠️ Text cleaning failed: {e}, using original text")
                 gpt_result = {

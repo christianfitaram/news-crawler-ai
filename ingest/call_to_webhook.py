@@ -50,8 +50,8 @@ def _log_outgoing(target_url: str, headers: Dict[str, Any], payload: Dict[str, A
     try:
         redacted_headers = {**headers, "X-Signature": "***redacted***"} if "X-Signature" in headers else headers
         print(f"Sending webhook POST to: {target_url}")
-        print(f"Headers: {redacted_headers}")
-        print("Payload:", json.dumps(payload, ensure_ascii=False))
+        # print(f"Headers: {redacted_headers}")
+        # print("Payload:", json.dumps(payload, ensure_ascii=False))
     except Exception:
         print("Payload (repr):", repr(payload))
 

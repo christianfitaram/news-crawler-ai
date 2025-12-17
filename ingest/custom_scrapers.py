@@ -528,7 +528,7 @@ def scrape_npr_selenium_stream() -> Iterable[Dict]:
     
     try:
         for category, section_url in NPR_SECTIONS.items():
-            print(f"\n📻 Scrapping NPR - {category}...")
+            print(f"\n Scrapping NPR - {category}...")
             driver.get(section_url)
             time.sleep(3)
             
