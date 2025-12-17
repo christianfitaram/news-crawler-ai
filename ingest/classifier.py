@@ -3,6 +3,8 @@ import os
 
 from dotenv import load_dotenv
 
+from ingest.call_to_GPT import call_to_gpt_api
+
 from .call_to_webhook import send_to_all_webhooks
 from pathlib import Path
 
@@ -19,8 +21,6 @@ from lib.repositories.articles_repository import ArticlesRepository
 from lib.repositories.link_pool_repository import LinkPoolRepository
 from lib.repositories.metadata_repository import MetadataRepository
 from lib.repositories.global_metadata_repository import GlobalMetadataRepository
-import requests
-import json
 import uuid
 load_dotenv()
 
@@ -316,97 +316,6 @@ def classify_articles():
     })
 
     return id_for_metadata
-
-
-def _parse_gpt_json(raw_text: str) -> dict | None:
-    if not raw_text:
-        return None
-    try:
-        return json.loads(raw_text)
-    except json.JSONDecodeError:
-        start = raw_text.find("{")
-        end = raw_text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return None
-        try:
-            return json.loads(raw_text[start:end + 1])
-        except json.JSONDecodeError:
-            return None
-
-
-def _normalize_gpt_payload(payload: dict) -> dict | None:
-    if not isinstance(payload, dict):
-        return None
-    cleaned_text = payload.get("cleaned_text")
-    if not isinstance(cleaned_text, str):
-        return None
-
-    def _clean_list(value):
-        if not isinstance(value, list):
-            return []
-        return [str(item).strip() for item in value if str(item).strip()]
-
-    return {
-        "cleaned_text": cleaned_text.strip(),
-        "locations": _clean_list(payload.get("locations", [])),
-        "organizations": _clean_list(payload.get("organizations", [])),
-        "persons": _clean_list(payload.get("persons", [])),
-    }
-
-
-def call_to_gpt_api(prompt: str, timeout: int = 60) -> dict:
-    prompt_final = """You are a professional text cleaner and entity extractor.
-Return a strict JSON object with only these keys:
-- cleaned_text (string)
-- locations (array of strings)
-- organizations (array of strings)
-- persons (array of strings)
-Rules:
-- Remove references to news outlets, authors, publication names, URLs, or web layout artifacts.
-- Discard malformed, incomplete, or irrelevant fragments.
-- Do not add new information or commentary.
-- If there are no entities, return empty arrays.
-Text to rewrite:
-""" + prompt
-
-    api_url = "http://localhost:11434/api/generate"
-
-    payload = {
-        "model": "gpt-oss:20b",
-        "prompt": prompt_final,
-        "stream": False
-    }
-
-    try:
-        response = requests.post(api_url, json=payload, timeout=timeout)
-        data = response.json()
-        parsed = _parse_gpt_json(data.get("response", "").strip())
-        normalized = _normalize_gpt_payload(parsed) if parsed else None
-        if normalized:
-            return normalized
-        print("GPT API response did not include valid JSON, using original text")
-        return {
-            "cleaned_text": prompt,
-            "locations": [],
-            "organizations": [],
-            "persons": [],
-        }
-    except requests.exceptions.Timeout:
-        print(f"GPT API timeout after {timeout}s, using original text")
-        return {
-            "cleaned_text": prompt,
-            "locations": [],
-            "organizations": [],
-            "persons": [],
-        }
-    except requests.exceptions.RequestException as e:
-        print(f"GPT API error: {e}, using original text")
-        return {
-            "cleaned_text": prompt,
-            "locations": [],
-            "organizations": [],
-            "persons": [],
-        }
 
 def add_one_to_total_articles_in_documents():
     selector = {"_id": ObjectId("6923b800f3d19f7c28f53a6d")}
