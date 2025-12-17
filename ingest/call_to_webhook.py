@@ -159,11 +159,6 @@ def get_news_data(insert_id: str, timeout: float = FETCH_TIMEOUT) -> Optional[Di
             "sentiment": data.get("sentiment"),
             "scraped_at": data.get("scraped_at"),
         }
-        # Log fetched data summary for debugging without leaking raw response
-        try:
-            print(f"Fetched news data for {insert_id}:", json.dumps(data_to_return, ensure_ascii=False))
-        except Exception:
-            print(f"Fetched news data for {insert_id} (repr):", repr(data_to_return))
         return data_to_return
     except (requests.exceptions.RequestException, ValueError) as e:
         # ValueError catches JSON decode errors
