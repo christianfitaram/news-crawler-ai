@@ -400,7 +400,7 @@ def scrape_guardian_selenium_stream() -> Iterable[Dict]:
                             "title": title,
                             "url": article_url,
                             "text": text,
-                            "source": "the-guardian-selenium",
+                            "source": "the-guardian",
                             "scraped_at": datetime.now(timezone.utc),
                         }
                         
@@ -496,7 +496,7 @@ def scrape_france24_selenium_stream() -> Iterable[Dict]:
                         "title": title,
                         "url": article_url,
                         "text": text,
-                        "source": "france24-selenium",
+                        "source": "france24",
                         "scraped_at": datetime.now(timezone.utc),
                     }
                     
@@ -587,7 +587,7 @@ def scrape_npr_selenium_stream() -> Iterable[Dict]:
                         "title": title,
                         "url": article_url,
                         "text": text,
-                        "source": "npr-selenium",
+                        "source": "npr",
                         "scraped_at": datetime.now(timezone.utc),
                     }
                     
