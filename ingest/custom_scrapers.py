@@ -511,19 +511,9 @@ def scrape_france24_selenium_stream() -> Iterable[Dict]:
 
 def scrape_npr_selenium_stream() -> Iterable[Dict]:
     """Scrape NPR using Selenium"""
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.common.by import By
-    from webdriver_manager.chrome import ChromeDriverManager
     import time
-    
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    
+
     NPR_SECTIONS = {
         "world": "https://www.npr.org/sections/world/",
         "business": "https://www.npr.org/sections/business/",
@@ -531,8 +521,7 @@ def scrape_npr_selenium_stream() -> Iterable[Dict]:
     }
     
     try:
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver = build_chrome_driver(headless=True)
     except Exception as e:
         print(f"Error: {e}")
         return
