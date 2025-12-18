@@ -65,11 +65,13 @@ Rules:
 - Remove references to news outlets, authors, publication names, URLs, or web layout artifacts.
 - Discard malformed, incomplete, or irrelevant fragments.
 - Do not add new information or commentary.
+- Locate and extract all principal named entities (locations, organizations, persons) mentioned in the text do not add any new entities that are not present.
+- Ensure the JSON is well-formed and parsable.
 - If there are no entities, return empty arrays.
 Text to rewrite:
 """ + prompt
 
-    api_url = "http://localhost:11434/api/generate"
+    api_url = "http://35.204.248.56:11434/api/generate"
 
     payload = {
         "model": "gpt-oss:20b",
