@@ -53,6 +53,26 @@ def _normalize_gpt_payload(payload: dict) -> Optional[dict]:
         "persons": entities.get("persons", []),
     }
 
+def _parse_gpt_json(raw_response) -> Optional[dict]:
+    if isinstance(raw_response, dict):
+        return raw_response
+    if not isinstance(raw_response, str):
+        return None
+    raw_text = raw_response.strip()
+    if not raw_text:
+        return None
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        start = raw_text.find("{")
+        end = raw_text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        try:
+            return json.loads(raw_text[start:end + 1])
+        except json.JSONDecodeError:
+            return None
+
 
 def call_to_gpt_api(prompt: str, timeout: int = 60) -> dict:
     prompt_final = f"""
@@ -87,7 +107,7 @@ Rules:
 
 Input text:
 <<<
-{text}
+{prompt}
 >>>
 """.strip()
 
@@ -103,15 +123,28 @@ Input text:
     try:
         response = requests.post(api_url, json=payload, timeout=timeout)
         data = response.json()
-        data_json = data.get("response", "")
-        
-        return{
-            "cleaned_text": data_json.get("cleaned_text",""),
-            "locations": data_json.get("locations",[]),
-            "organizations": data_json.get("organizations",[]),
-            "persons": data_json.get("persons",[]),
+        parsed = _parse_gpt_json(data.get("response", ""))
+        if parsed:
+            cleaned_text = parsed.get("cleaned_text", prompt)
+            if not isinstance(cleaned_text, str):
+                cleaned_text = prompt
+            locations = parsed.get("locations", [])
+            organizations = parsed.get("organizations", [])
+            persons = parsed.get("persons", [])
+            return {
+                "cleaned_text": cleaned_text.strip(),
+                "locations": locations if isinstance(locations, list) else [],
+                "organizations": organizations if isinstance(organizations, list) else [],
+                "persons": persons if isinstance(persons, list) else [],
+            }
+        print("GPT API response did not include valid JSON, using original text")
+        return {
+            "cleaned_text": prompt,
+            "locations": [],
+            "organizations": [],
+            "persons": [],
         }
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         print("GPT API returned invalid JSON, using original text")
         return {
             "cleaned_text": prompt,

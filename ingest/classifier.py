@@ -238,7 +238,7 @@ def classify_articles():
             sentiment = sentiment_pipeline(summary)[0]
             try:
                 gpt_result = call_to_gpt_api(article.get("text"), timeout=60)  # 60 second timeout
-                print(gpt_result)
+                print("gpt_result: -->",gpt_result)
             except Exception as e:
                 print(f"[{i}] ⚠️ Text cleaning failed: {e}, using original text")
                 gpt_result = {
@@ -248,6 +248,7 @@ def classify_articles():
                     "persons": [],
                 }
             text_cleaned = gpt_result.get("cleaned_text", article.get("text", ""))
+            entities_enriched = None
             if not (gpt_result.get("locations") or gpt_result.get("organizations") or gpt_result.get("persons")):
                 entities_enriched = None
             classified_article = {
