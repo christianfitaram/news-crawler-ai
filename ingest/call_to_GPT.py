@@ -55,21 +55,42 @@ def _normalize_gpt_payload(payload: dict) -> Optional[dict]:
 
 
 def call_to_gpt_api(prompt: str, timeout: int = 60) -> dict:
-    prompt_final = """You are a professional text cleaner and entity extractor.
-Return a strict JSON object with only these keys:
-- cleaned_text (string)
-- locations (array of strings)
-- organizations (array of strings)
-- persons (array of strings)
+    prompt_final = f"""
+You are a professional text cleaner and entity extraction engine.
+Output must be ONLY valid JSON.
+
+Return a single JSON object with EXACTLY these keys:
+{{
+  "cleaned_text": string,
+  "locations": string[],
+  "organizations": string[],
+  "persons": string[]
+}}
+
+Tasks:
+1. Clean the input text.
+2. Extract named entities (locations, organizations, persons) from the cleaned text.
+
 Rules:
-- Remove references to news outlets, authors, publication names, URLs, or web layout artifacts.
-- Discard malformed, incomplete, or irrelevant fragments.
-- Do not add new information or commentary.
-- Locate and extract all principal named entities (locations, organizations, persons) mentioned in the text do not add any new entities that are not present.
-- Ensure the JSON is well-formed and parsable.
-- If there are no entities, return empty arrays.
-Text to rewrite:
-""" + prompt
+- Output JSON ONLY. No markdown, no explanation, no extra keys, no trailing commas.
+- Do NOT add new information or commentary.
+- Entities must appear explicitly in the text. Do NOT infer or normalize beyond simple cleanup.
+- Remove noise and artifacts, including:
+  * news outlets, publishers, authors, bylines
+  * URLs, navigation text, cookie banners, image captions, layout fragments
+- Discard malformed, incomplete, duplicated, or irrelevant fragments.
+- Discard generic groups (e.g., "protesters", "police", "organizers", "resident") unless a proper name is given.
+- Deduplicate entities (case-insensitive) while preserving original casing.
+- Prefer full names as written in the text.
+- If no entities exist for a category, return an empty array.
+- The cleaned_text must be coherent, readable, and derived only from the original content.
+
+Input text:
+<<<
+{text}
+>>>
+""".strip()
+
 
     api_url = "http://35.204.248.56:11434/api/generate"
 
@@ -82,11 +103,16 @@ Text to rewrite:
     try:
         response = requests.post(api_url, json=payload, timeout=timeout)
         data = response.json()
-        parsed = _parse_gpt_json(data.get("response", "").strip())
-        normalized = _normalize_gpt_payload(parsed) if parsed else None
-        if normalized:
-            return normalized
-        print("GPT API response did not include valid JSON, using original text")
+        data_json = data.get("response", "")
+        
+        return{
+            "cleaned_text": data_json.get("cleaned_text",""),
+            "locations": data_json.get("locations",[]),
+            "organizations": data_json.get("organizations",[]),
+            "persons": data_json.get("persons",[]),
+        }
+    except json.JSONDecodeError:
+        print("GPT API returned invalid JSON, using original text")
         return {
             "cleaned_text": prompt,
             "locations": [],
@@ -109,21 +135,6 @@ Text to rewrite:
             "organizations": [],
             "persons": [],
         }
-
-def _parse_gpt_json(raw_text: str) -> Optional[dict]:
-    if not raw_text:
-        return None
-    try:
-        return json.loads(raw_text)
-    except json.JSONDecodeError:
-        start = raw_text.find("{")
-        end = raw_text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return None
-        try:
-            return json.loads(raw_text[start:end + 1])
-        except json.JSONDecodeError:
-            return None
 
 if __name__ == "__main__":
     data = call_to_gpt_api("Deal to avoid drug tariffs has no underlying text beyond limited headline terms. Ministers and senior MPs have warned that the agreements with Donald Trump are ‘built on sand’ Concerns over the basis of the agreement have been heightened by Washington’s decision to suspend the £31bn ‘tech prosperity deal’ The deal was paused after the US claimed a lack of progress from the UK in lowering trade barriers in other areas.\nGovernment figures downplayed the chances of the US reneging on the pharma deal, which took weeks longer to finalise than expected. One source said the US pharmaceutical industry had been pushing for the agreement as they wanted certainty on imports and drug prices, while by comparison the tech prosperity deal ‘was always quite abstract’ Another said this instability was the ‘new normal now in our relationship across the pond’\nUS-UK tariff deal agreed last May still not formally approved. Quota on beef exports that were due to kick in next month still not approved. US informed the UK it was pausing the tech prosperity deal over wider trade disagreements last week before Peter Kyle, the trade secretary, held meetings with senior US officials in Washington, including commerce secretary Howard Lutnick. Several officials said those meetings were ‘very positive’")
