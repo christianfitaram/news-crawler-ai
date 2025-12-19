@@ -74,7 +74,7 @@ def _parse_gpt_json(raw_response) -> Optional[dict]:
             return None
 
 
-def call_to_gpt_api(prompt: str, timeout: int = 60) -> dict:
+def call_to_gpt_api(prompt: str, timeout: int = 120) -> dict:
     prompt_final = f"""
 You are a professional text cleaner and entity extraction engine.
 Output must be ONLY valid JSON.
