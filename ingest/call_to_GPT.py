@@ -346,6 +346,7 @@ def _extract_entities_with_llm(
         prompt = _build_extractor_prompt(ch)
         try:
             out = call_ollama_generate(api_url, model, prompt, timeout=timeout, options=options)
+            print(f"Extractor output chunk {i}/{len(chunks)}: {out}")
             parsed = _safe_json_loads(out)
             if not isinstance(parsed, dict):
                 raise ValueError("Extractor did not return JSON object")
