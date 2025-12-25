@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Dict, Any, List, Iterable, Tuple
+from typing import Optional, Dict, Any, List, Iterable
 import os
 import json
 import re
@@ -36,6 +36,10 @@ def _dedupe_preserve_first(values: Iterable[str]) -> List[str]:
 
 
 def normalize_entity_lists(obj: Dict[str, Any]) -> Dict[str, List[str]]:
+    """
+    Strict normalizer: expects exact keys locations/organizations/persons.
+    Raises are handled in caller.
+    """
     out: Dict[str, List[str]] = {}
     for k in ("locations", "organizations", "persons"):
         v = obj.get(k, [])
@@ -78,13 +82,11 @@ def _chunk_text(text: str, max_chars: int) -> List[str]:
             cur_len += add_len
             continue
 
-        # paragraph too big or would overflow; flush current
         flush()
 
-        # if paragraph still too big, hard split
         if len(p) > max_chars:
             for i in range(0, len(p), max_chars):
-                part = p[i:i + max_chars].strip()
+                part = p[i : i + max_chars].strip()
                 if part:
                     chunks.append(part)
         else:
@@ -101,9 +103,7 @@ def _simple_clean_fallback(raw_text: str) -> str:
     Delete common scraping noise; no paraphrasing.
     """
     t = raw_text or ""
-    # remove URLs
     t = re.sub(r"https?://\S+", "", t)
-    # remove common footer/promos
     junk_patterns = [
         r"Follow .*? news on .*?(?:\.|$)",
         r"Share this.*?(?:\.|$)",
@@ -113,50 +113,9 @@ def _simple_clean_fallback(raw_text: str) -> str:
     ]
     for pat in junk_patterns:
         t = re.sub(pat, "", t, flags=re.IGNORECASE | re.DOTALL)
-    # collapse excessive whitespace
     t = re.sub(r"[ \t]+\n", "\n", t)
     t = re.sub(r"\n{3,}", "\n\n", t)
     return t.strip()
-
-
-def _regex_entity_fallback(cleaned_text: str) -> Dict[str, List[str]]:
-    """
-    Very lightweight regex fallback to avoid empty outputs.
-    Conservative: collect multi-token Title Case spans.
-    """
-    text = cleaned_text or ""
-    # Capture sequences like "Steve Reed", "Disneyland Paris", "Universal Studios"
-    candidates = re.findall(r"\b(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,4})\b", text)
-    cands = _dedupe_preserve_first(candidates)
-
-    persons: List[str] = []
-    orgs: List[str] = []
-    locs: List[str] = []
-
-    # Heuristics: if preceded by "Mr/Ms/Dr/Secretary/President" treat as person
-    for c in cands:
-        if re.search(rf"(Mr|Ms|Mrs|Dr|Secretary|President)\s+{re.escape(c)}", text):
-            persons.append(c)
-
-    # Common org/location suffix hints
-    org_suffix = ("Ltd", "Inc", "Company", "University", "Ministry", "Council", "BBC", "Forbes", "TikTok", "YouTube")
-    loc_suffix = ("Paris", "Europe", "UK", "England", "Scotland", "Wales", "Ireland", "Bedford", "Berkshire", "Surrey", "Staffordshire", "Atlanta", "Georgia")
-
-    for c in cands:
-        if c in persons:
-            continue
-        if any(s in c for s in org_suffix):
-            orgs.append(c)
-            continue
-        if any(s == c.split()[-1] for s in loc_suffix):
-            locs.append(c)
-            continue
-
-    return {
-        "persons": _dedupe_preserve_first(persons),
-        "organizations": _dedupe_preserve_first(orgs),
-        "locations": _dedupe_preserve_first(locs),
-    }
 
 
 # -----------------------------
@@ -173,6 +132,7 @@ def call_ollama_generate(
         "model": model,
         "prompt": prompt,
         "stream": False,
+        "format": "json",  # IMPORTANT: force JSON mode
     }
     if options:
         payload["options"] = options
@@ -186,7 +146,7 @@ def call_ollama_generate(
 def _default_ollama_options() -> Dict[str, Any]:
     """
     Sensible defaults for extraction/cleaning stability.
-    You can override via env vars.
+    Override via env vars.
     """
     def _env_float(key: str, default: float) -> float:
         try:
@@ -200,17 +160,13 @@ def _default_ollama_options() -> Dict[str, Any]:
         except Exception:
             return default
 
+    # For GPT-OSS: keep deterministic
     opts: Dict[str, Any] = {
         "temperature": _env_float("OLLAMA_TEMPERATURE", 0.0),
-        "top_p": _env_float("OLLAMA_TOP_P", 0.9),
+        "top_p": _env_float("OLLAMA_TOP_P", 1.0),
+        "num_ctx": _env_int("OLLAMA_NUM_CTX", 8192),
+        "num_predict": _env_int("OLLAMA_NUM_PREDICT", 800),
     }
-
-    # Bigger context helps avoid truncation inside Ollama (if your model supports it)
-    opts["num_ctx"] = _env_int("OLLAMA_NUM_CTX", 4096)
-
-    # Cap generation so the model doesn't ramble (and speeds up)
-    opts["num_predict"] = _env_int("OLLAMA_NUM_PREDICT", 800)
-
     return opts
 
 
@@ -259,12 +215,43 @@ Rules:
 - Extract entities ONLY from cleaned_text below.
 - Every entity MUST appear EXACTLY as a substring in cleaned_text (verbatim match).
 - Do NOT infer, normalize, expand, translate, or correct names.
-- Include ALL proper names that appear (high recall).
+- Include proper names that appear. Prefer full names as written.
 - Do NOT include generic groups (e.g., "police", "protesters") unless a proper name is explicitly present.
 - Deduplicate case-insensitively while preserving the first-seen original casing.
-- Prefer full names as written (e.g., "Fedor Gorst" not "Gorst" if both appear).
 - If none exist for a category, return [].
 - Self-check: each array item must appear verbatim in cleaned_text.
+
+Example output:
+{{"locations":["Israel"],"organizations":["Binance"],"persons":["Steve Reed"]}}
+
+cleaned_text:
+<<<
+{cleaned_text}
+>>>
+""".strip()
+
+
+def _build_extractor_retry_prompt(cleaned_text: str, previous_output: str) -> str:
+    return f"""You previously returned empty arrays or missed entities.
+
+Output MUST be ONLY valid JSON.
+Return a single JSON object with EXACTLY these keys:
+{{
+  "locations": string[],
+  "organizations": string[],
+  "persons": string[]
+}}
+
+Hard rules:
+- Every item MUST appear verbatim as a substring in cleaned_text.
+- If there is ANY proper name (person/org/place) in cleaned_text, you MUST include it.
+- Only return [] for a category if there are truly none in the text.
+- Deduplicate case-insensitively and keep first-seen casing.
+
+Previous output:
+<<<
+{previous_output}
+>>>
 
 cleaned_text:
 <<<
@@ -282,7 +269,7 @@ def _safe_json_loads(s: str) -> Optional[dict]:
     try:
         return json.loads(s)
     except Exception:
-        # Try to salvage JSON object inside (common LLM glitch)
+        # Try to salvage JSON object inside (common model glitch)
         m = re.search(r"\{.*\}", s, flags=re.DOTALL)
         if not m:
             return None
@@ -290,6 +277,18 @@ def _safe_json_loads(s: str) -> Optional[dict]:
             return json.loads(m.group(0))
         except Exception:
             return None
+
+
+def _validate_extractor_schema(d: Dict[str, Any]) -> None:
+    required = ("locations", "organizations", "persons")
+    missing = [k for k in required if k not in d]
+    if missing:
+        raise ValueError(f"Extractor JSON missing keys {missing}. Got keys: {list(d.keys())}")
+    for k in required:
+        if d.get(k) is None:
+            continue
+        if not isinstance(d.get(k), list):
+            raise ValueError(f"Extractor key '{k}' must be a list, got {type(d.get(k))}")
 
 
 def _clean_text_with_llm(
@@ -314,13 +313,15 @@ def _clean_text_with_llm(
                 raise ValueError("Cleaner did not return JSON with cleaned_text")
             cleaned_parts.append(str(parsed.get("cleaned_text", "")).strip())
         except requests.exceptions.Timeout:
-            print(f"GPT/Ollama cleaner timeout after {timeout}s on chunk {i}/{len(chunks)}; using deterministic fallback for this chunk")
+            print(
+                f"GPT/Ollama cleaner timeout after {timeout}s on chunk {i}/{len(chunks)}; "
+                f"using deterministic fallback for this chunk"
+            )
             cleaned_parts.append(_simple_clean_fallback(ch))
         except Exception as e:
             print(f"GPT/Ollama cleaner error on chunk {i}/{len(chunks)}: {e}; using deterministic fallback for this chunk")
             cleaned_parts.append(_simple_clean_fallback(ch))
 
-    # Join and lightly normalize whitespace
     joined = "\n\n".join([p for p in cleaned_parts if p.strip()]).strip()
     joined = re.sub(r"\n{3,}", "\n\n", joined)
     return joined.strip()
@@ -346,14 +347,27 @@ def _extract_entities_with_llm(
         prompt = _build_extractor_prompt(ch)
         try:
             out = call_ollama_generate(api_url, model, prompt, timeout=timeout, options=options)
-            print(f"Extractor output chunk {i}/{len(chunks)}: {out}")
             parsed = _safe_json_loads(out)
             if not isinstance(parsed, dict):
-                raise ValueError("Extractor did not return JSON object")
+                raise ValueError(f"Extractor did not return JSON object. Raw: {out[:300]}")
+
+            _validate_extractor_schema(parsed)
             norm = normalize_entity_lists(parsed)
+
+            # If all empty for this chunk, retry once (model-only)
+            if not (norm["locations"] or norm["organizations"] or norm["persons"]):
+                retry_prompt = _build_extractor_retry_prompt(ch, previous_output=out)
+                out2 = call_ollama_generate(api_url, model, retry_prompt, timeout=timeout, options=options)
+                parsed2 = _safe_json_loads(out2)
+                if isinstance(parsed2, dict):
+                    _validate_extractor_schema(parsed2)
+                    norm2 = normalize_entity_lists(parsed2)
+                    norm = norm2
+
             locs.extend(norm.get("locations", []))
             orgs.extend(norm.get("organizations", []))
             pers.extend(norm.get("persons", []))
+
         except requests.exceptions.Timeout:
             print(f"GPT/Ollama extractor timeout after {timeout}s on chunk {i}/{len(chunks)}; skipping this chunk")
         except Exception as e:
@@ -364,23 +378,13 @@ def _extract_entities_with_llm(
         "organizations": _dedupe_preserve_first(orgs),
         "persons": _dedupe_preserve_first(pers),
     }
-
-    # Optional regex fallback if everything is empty
-    if os.getenv("USE_REGEX_FALLBACK", "1").strip() in ("1", "true", "True") and not any(merged.values()):
-        fb = _regex_entity_fallback(cleaned_text)
-        merged = {
-            "locations": fb.get("locations", []),
-            "organizations": fb.get("organizations", []),
-            "persons": fb.get("persons", []),
-        }
-
     return merged
 
 
 def _cap_cleaned_text_for_downstream(cleaned_text: str) -> str:
     """
-    Prevent downstream transformer models with small max_length (e.g. 1024 tokens) from crashing.
-    Default cap is conservative and configurable via env var.
+    Prevent downstream transformer models with small max_length from crashing.
+    NOTE: We do NOT cap before LLM extraction; only for returning/downstream.
     """
     try:
         max_chars = int(os.getenv("MAX_CLEANED_TEXT_CHARS", "4500"))
@@ -391,9 +395,8 @@ def _cap_cleaned_text_for_downstream(cleaned_text: str) -> str:
     if len(t) <= max_chars:
         return t
 
-    # Keep start + end to preserve both headline entities and later details.
     head = t[: int(max_chars * 0.7)].rstrip()
-    tail = t[-int(max_chars * 0.3):].lstrip()
+    tail = t[-int(max_chars * 0.3) :].lstrip()
     return (head + "\n...\n" + tail).strip()
 
 
@@ -401,14 +404,13 @@ def call_to_gpt_api(text: str, timeout: int = 60) -> Dict[str, Any]:
     """
     Backwards-compatible wrapper:
     - Cleans (pass 1)
-    - Extracts entities (pass 2)
+    - Extracts entities (pass 2) using FULL cleaned text (no cap)
     - Returns dict with keys: cleaned_text, locations, organizations, persons
-      where arrays are list[{"name": ..., "key": ...}] to match your pipeline.
+      where arrays are list[str]
     """
     api_url = os.getenv("OLLAMA_GENERATE_URL", "http://localhost:11434/api/generate")
     model = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
 
-    # Timeouts per chunk (override with env if you want)
     try:
         cleaner_timeout = int(os.getenv("CLEANER_TIMEOUT", str(timeout)))
     except Exception:
@@ -439,10 +441,9 @@ def call_to_gpt_api(text: str, timeout: int = 60) -> Dict[str, Any]:
         max_chunk_chars=cleaner_chunk,
     )
 
-    cleaned_capped = _cap_cleaned_text_for_downstream(cleaned)
-
+    # Extract from FULL cleaned text (no cap here)
     entities = _extract_entities_with_llm(
-        cleaned_text=cleaned_capped,
+        cleaned_text=cleaned,
         api_url=api_url,
         model=model,
         timeout=extractor_timeout,
@@ -450,15 +451,8 @@ def call_to_gpt_api(text: str, timeout: int = 60) -> Dict[str, Any]:
         max_chunk_chars=extractor_chunk,
     )
 
-    # Convert to the previous "array of {name,key}" format if needed by the pipeline
-    def _to_name_key_list(values: List[str]) -> List[Dict[str, str]]:
-        out = []
-        for v in values:
-            k = _normalize_entity_key(v)
-            if not k:
-                continue
-            out.append({"name": v, "key": k})
-        return out
+    # Cap only for return/downstream
+    cleaned_capped = _cap_cleaned_text_for_downstream(cleaned)
 
     return {
         "cleaned_text": cleaned_capped,
