@@ -3,3 +3,10 @@ models
 .env
 .idea
 */__pycache__/
+
+scripts/fix_text.py
+scripts/get_ids.py
+scripts/select_representative_sample.py
+call_to_GPT-2.py
+outputs/*
+.DS_Store
