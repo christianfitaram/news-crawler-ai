@@ -6,6 +6,11 @@ import json
 import re
 import requests
 
+# GenAI (Gemini) SDK
+# pip install google-genai
+from google import genai
+from google.genai import types
+
 
 # -----------------------------
 # Helpers
@@ -38,7 +43,6 @@ def _dedupe_preserve_first(values: Iterable[str]) -> List[str]:
 def normalize_entity_lists(obj: Dict[str, Any]) -> Dict[str, List[str]]:
     """
     Strict normalizer: expects exact keys locations/organizations/persons.
-    Raises are handled in caller.
     """
     out: Dict[str, List[str]] = {}
     for k in ("locations", "organizations", "persons"):
@@ -55,11 +59,9 @@ def _chunk_text(text: str, max_chars: int) -> List[str]:
     """
     Chunk text by paragraph boundaries when possible, otherwise hard-split.
     """
-    text = text or ""
-    text = text.strip()
+    text = (text or "").strip()
     if not text:
         return []
-
     if len(text) <= max_chars:
         return [text]
 
@@ -119,7 +121,7 @@ def _simple_clean_fallback(raw_text: str) -> str:
 
 
 # -----------------------------
-# Ollama call
+# Ollama call (cleaning stays on Ollama)
 # -----------------------------
 def call_ollama_generate(
     api_url: str,
@@ -132,7 +134,7 @@ def call_ollama_generate(
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "format": "json",  # IMPORTANT: force JSON mode
+        "format": "json",  # force JSON mode
     }
     if options:
         payload["options"] = options
@@ -144,10 +146,6 @@ def call_ollama_generate(
 
 
 def _default_ollama_options() -> Dict[str, Any]:
-    """
-    Sensible defaults for extraction/cleaning stability.
-    Override via env vars.
-    """
     def _env_float(key: str, default: float) -> float:
         try:
             return float(os.getenv(key, str(default)))
@@ -160,14 +158,12 @@ def _default_ollama_options() -> Dict[str, Any]:
         except Exception:
             return default
 
-    # For GPT-OSS: keep deterministic
-    opts: Dict[str, Any] = {
+    return {
         "temperature": _env_float("OLLAMA_TEMPERATURE", 0.0),
         "top_p": _env_float("OLLAMA_TOP_P", 1.0),
         "num_ctx": _env_int("OLLAMA_NUM_CTX", 8192),
         "num_predict": _env_int("OLLAMA_NUM_PREDICT", 800),
     }
-    return opts
 
 
 # -----------------------------
@@ -200,60 +196,34 @@ Input text:
 """.strip()
 
 
-def _build_extractor_prompt(cleaned_text: str) -> str:
-    return f"""You are a STRICT named-entity extraction engine.
-
-Output MUST be ONLY valid JSON.
-Return a single JSON object with EXACTLY these keys:
-{{
-  "locations": string[],
-  "organizations": string[],
-  "persons": string[]
-}}
+def _build_genai_extractor_prompt(cleaned_text: str) -> str:
+    # NOTE: We rely on response_schema for structure, not "ONLY JSON" prompting.
+    return f"""Extract named entities from the text.
 
 Rules:
-- Extract entities ONLY from cleaned_text below.
-- Every entity MUST appear EXACTLY as a substring in cleaned_text (verbatim match).
+- Extract entities ONLY from the text below.
+- Every entity MUST appear EXACTLY as a substring in the text (verbatim match).
 - Do NOT infer, normalize, expand, translate, or correct names.
-- Include proper names that appear. Prefer full names as written.
-- Do NOT include generic groups (e.g., "police", "protesters") unless a proper name is explicitly present.
-- Deduplicate case-insensitively while preserving the first-seen original casing.
-- If none exist for a category, return [].
-- Self-check: each array item must appear verbatim in cleaned_text.
+- Deduplicate case-insensitively, keep first-seen casing.
+- Prefer full names as written (e.g., "Fedor Gorst" over "Gorst" if both appear).
+- If none exist for a category, return an empty array for that category.
 
-Example output:
-{{"locations":["Israel"],"organizations":["Binance"],"persons":["Steve Reed"]}}
-
-cleaned_text:
+Text:
 <<<
 {cleaned_text}
 >>>
 """.strip()
 
 
-def _build_extractor_retry_prompt(cleaned_text: str, previous_output: str) -> str:
+def _build_genai_extractor_retry_prompt(cleaned_text: str) -> str:
     return f"""You previously returned empty arrays or missed entities.
 
-Output MUST be ONLY valid JSON.
-Return a single JSON object with EXACTLY these keys:
-{{
-  "locations": string[],
-  "organizations": string[],
-  "persons": string[]
-}}
-
 Hard rules:
-- Every item MUST appear verbatim as a substring in cleaned_text.
-- If there is ANY proper name (person/org/place) in cleaned_text, you MUST include it.
-- Only return [] for a category if there are truly none in the text.
-- Deduplicate case-insensitively and keep first-seen casing.
+- Every item MUST appear verbatim as a substring in the text.
+- If there is ANY proper name (person/org/place) in the text, you MUST include it.
+- Only return empty arrays if there are truly none in the text.
 
-Previous output:
-<<<
-{previous_output}
->>>
-
-cleaned_text:
+Text:
 <<<
 {cleaned_text}
 >>>
@@ -261,7 +231,7 @@ cleaned_text:
 
 
 # -----------------------------
-# 2-pass pipeline (chunked)
+# JSON parsing / validation
 # -----------------------------
 def _safe_json_loads(s: str) -> Optional[dict]:
     if not isinstance(s, str) or not s.strip():
@@ -269,7 +239,6 @@ def _safe_json_loads(s: str) -> Optional[dict]:
     try:
         return json.loads(s)
     except Exception:
-        # Try to salvage JSON object inside (common model glitch)
         m = re.search(r"\{.*\}", s, flags=re.DOTALL)
         if not m:
             return None
@@ -285,12 +254,16 @@ def _validate_extractor_schema(d: Dict[str, Any]) -> None:
     if missing:
         raise ValueError(f"Extractor JSON missing keys {missing}. Got keys: {list(d.keys())}")
     for k in required:
-        if d.get(k) is None:
+        v = d.get(k)
+        if v is None:
             continue
-        if not isinstance(d.get(k), list):
-            raise ValueError(f"Extractor key '{k}' must be a list, got {type(d.get(k))}")
+        if not isinstance(v, list):
+            raise ValueError(f"Extractor key '{k}' must be a list, got {type(v)}")
 
 
+# -----------------------------
+# Pass 1: Clean with Ollama (chunked)
+# -----------------------------
 def _clean_text_with_llm(
     raw_text: str,
     api_url: str,
@@ -313,13 +286,10 @@ def _clean_text_with_llm(
                 raise ValueError("Cleaner did not return JSON with cleaned_text")
             cleaned_parts.append(str(parsed.get("cleaned_text", "")).strip())
         except requests.exceptions.Timeout:
-            print(
-                f"GPT/Ollama cleaner timeout after {timeout}s on chunk {i}/{len(chunks)}; "
-                f"using deterministic fallback for this chunk"
-            )
+            print(f"Ollama cleaner timeout after {timeout}s on chunk {i}/{len(chunks)}; using deterministic fallback")
             cleaned_parts.append(_simple_clean_fallback(ch))
         except Exception as e:
-            print(f"GPT/Ollama cleaner error on chunk {i}/{len(chunks)}: {e}; using deterministic fallback for this chunk")
+            print(f"Ollama cleaner error on chunk {i}/{len(chunks)}: {e}; using deterministic fallback")
             cleaned_parts.append(_simple_clean_fallback(ch))
 
     joined = "\n\n".join([p for p in cleaned_parts if p.strip()]).strip()
@@ -327,65 +297,99 @@ def _clean_text_with_llm(
     return joined.strip()
 
 
-def _extract_entities_with_llm(
+# -----------------------------
+# Pass 2: Extract with GenAI (Gemini) (chunked)
+# -----------------------------
+def _genai_client() -> genai.Client:
+    """
+    Auth:
+      - Gemini Developer API: set GEMINI_API_KEY or GOOGLE_API_KEY env var (recommended).
+      - Or pass api_key=... explicitly.
+    """
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if api_key:
+        return genai.Client(api_key=api_key)
+    # If you rely on env-based auth (SDK auto-picks), this still works:
+    return genai.Client()
+
+
+def _genai_entity_schema() -> Dict[str, Any]:
+    # JSON Schema for structured output
+    return {
+        "type": "object",
+        "properties": {
+            "locations": {"type": "array", "items": {"type": "string"}},
+            "organizations": {"type": "array", "items": {"type": "string"}},
+            "persons": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["locations", "organizations", "persons"],
+    }
+
+
+def _extract_entities_with_genai(
     cleaned_text: str,
-    api_url: str,
     model: str,
-    timeout: int,
-    options: Dict[str, Any],
     max_chunk_chars: int,
 ) -> Dict[str, List[str]]:
     chunks = _chunk_text(cleaned_text, max_chunk_chars)
     if not chunks:
         return {"locations": [], "organizations": [], "persons": []}
 
+    client = _genai_client()
+    schema = _genai_entity_schema()
+
     locs: List[str] = []
     orgs: List[str] = []
     pers: List[str] = []
 
     for i, ch in enumerate(chunks, 1):
-        prompt = _build_extractor_prompt(ch)
+        prompt = _build_genai_extractor_prompt(ch)
+
+        cfg = types.GenerateContentConfig(
+            temperature=float(os.getenv("GENAI_TEMPERATURE", "0.0")),
+            top_p=float(os.getenv("GENAI_TOP_P", "1.0")),
+            response_mime_type="application/json",
+            response_schema=schema,
+        )
+
         try:
-            out = call_ollama_generate(api_url, model, prompt, timeout=timeout, options=options)
-            parsed = _safe_json_loads(out)
+            resp = client.models.generate_content(model=model, contents=prompt, config=cfg)
+            # With structured output, .text should already be JSON
+            parsed = _safe_json_loads(getattr(resp, "text", "") or "")
             if not isinstance(parsed, dict):
-                raise ValueError(f"Extractor did not return JSON object. Raw: {out[:300]}")
+                raise ValueError(f"GenAI extractor did not return JSON object. Raw: {(getattr(resp,'text','') or '')[:300]}")
 
             _validate_extractor_schema(parsed)
             norm = normalize_entity_lists(parsed)
 
-            # If all empty for this chunk, retry once (model-only)
+            # Retry once per chunk if empty (still GenAI-only)
             if not (norm["locations"] or norm["organizations"] or norm["persons"]):
-                retry_prompt = _build_extractor_retry_prompt(ch, previous_output=out)
-                out2 = call_ollama_generate(api_url, model, retry_prompt, timeout=timeout, options=options)
-                parsed2 = _safe_json_loads(out2)
+                retry_prompt = _build_genai_extractor_retry_prompt(ch)
+                resp2 = client.models.generate_content(model=model, contents=retry_prompt, config=cfg)
+                parsed2 = _safe_json_loads(getattr(resp2, "text", "") or "")
                 if isinstance(parsed2, dict):
                     _validate_extractor_schema(parsed2)
                     norm2 = normalize_entity_lists(parsed2)
                     norm = norm2
 
-            locs.extend(norm.get("locations", []))
-            orgs.extend(norm.get("organizations", []))
-            pers.extend(norm.get("persons", []))
+            locs.extend(norm["locations"])
+            orgs.extend(norm["organizations"])
+            pers.extend(norm["persons"])
 
-        except requests.exceptions.Timeout:
-            print(f"GPT/Ollama extractor timeout after {timeout}s on chunk {i}/{len(chunks)}; skipping this chunk")
         except Exception as e:
-            print(f"GPT/Ollama extractor error on chunk {i}/{len(chunks)}: {e}; skipping this chunk")
+            print(f"GenAI extractor error on chunk {i}/{len(chunks)}: {e}; skipping this chunk")
 
-    merged = {
+    return {
         "locations": _dedupe_preserve_first(locs),
         "organizations": _dedupe_preserve_first(orgs),
         "persons": _dedupe_preserve_first(pers),
     }
-    return merged
 
 
+# -----------------------------
+# Downstream cap (only for return / small models)
+# -----------------------------
 def _cap_cleaned_text_for_downstream(cleaned_text: str) -> str:
-    """
-    Prevent downstream transformer models with small max_length from crashing.
-    NOTE: We do NOT cap before LLM extraction; only for returning/downstream.
-    """
     try:
         max_chars = int(os.getenv("MAX_CLEANED_TEXT_CHARS", "4500"))
     except Exception:
@@ -400,25 +404,23 @@ def _cap_cleaned_text_for_downstream(cleaned_text: str) -> str:
     return (head + "\n...\n" + tail).strip()
 
 
+# -----------------------------
+# Public API
+# -----------------------------
 def call_to_gpt_api(text: str, timeout: int = 60) -> Dict[str, Any]:
     """
-    Backwards-compatible wrapper:
-    - Cleans (pass 1)
-    - Extracts entities (pass 2) using FULL cleaned text (no cap)
-    - Returns dict with keys: cleaned_text, locations, organizations, persons
-      where arrays are list[str]
+    - Pass 1: clean with Ollama (gpt-oss:20b by default)
+    - Pass 2: entity extraction with GenAI (Gemini) using structured output (JSON Schema)
+    - Returns: cleaned_text (capped), locations/orgs/persons (list[str])
     """
-    api_url = os.getenv("OLLAMA_GENERATE_URL", "http://localhost:11434/api/generate")
-    model = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
+    # --- Ollama cleaning ---
+    ollama_url = os.getenv("OLLAMA_GENERATE_URL", "http://localhost:11434/api/generate")
+    ollama_model = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
 
     try:
         cleaner_timeout = int(os.getenv("CLEANER_TIMEOUT", str(timeout)))
     except Exception:
         cleaner_timeout = timeout
-    try:
-        extractor_timeout = int(os.getenv("EXTRACTOR_TIMEOUT", str(timeout)))
-    except Exception:
-        extractor_timeout = timeout
 
     opts = _default_ollama_options()
 
@@ -427,31 +429,29 @@ def call_to_gpt_api(text: str, timeout: int = 60) -> Dict[str, Any]:
     except Exception:
         cleaner_chunk = 7000
 
-    try:
-        extractor_chunk = int(os.getenv("EXTRACTOR_MAX_CHUNK_CHARS", "3000"))
-    except Exception:
-        extractor_chunk = 3000
-
     cleaned = _clean_text_with_llm(
         raw_text=text,
-        api_url=api_url,
-        model=model,
+        api_url=ollama_url,
+        model=ollama_model,
         timeout=cleaner_timeout,
         options=opts,
         max_chunk_chars=cleaner_chunk,
     )
 
-    # Extract from FULL cleaned text (no cap here)
-    entities = _extract_entities_with_llm(
+    # --- GenAI extraction (use full cleaned text, do NOT cap before extraction) ---
+    genai_model = os.getenv("GENAI_MODEL", "gemini-2.0-flash")
+
+    try:
+        genai_chunk = int(os.getenv("GENAI_MAX_CHUNK_CHARS", "12000"))
+    except Exception:
+        genai_chunk = 12000
+
+    entities = _extract_entities_with_genai(
         cleaned_text=cleaned,
-        api_url=api_url,
-        model=model,
-        timeout=extractor_timeout,
-        options=opts,
-        max_chunk_chars=extractor_chunk,
+        model=genai_model,
+        max_chunk_chars=genai_chunk,
     )
 
-    # Cap only for return/downstream
     cleaned_capped = _cap_cleaned_text_for_downstream(cleaned)
 
     return {
