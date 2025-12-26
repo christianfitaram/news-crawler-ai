@@ -214,6 +214,25 @@ Text:
 >>>
 """.strip()
 
+def _build_genai_cleaner_prompt(raw_text: str) -> str:
+    # NOTE: We rely on response_schema for structure, not "ONLY JSON" prompting.
+    return f"""You are a STRICT text cleaner.
+    LEANING RULES (DELETE-ONLY):
+- You may ONLY remove content; do NOT paraphrase, summarize, translate, or reorder.
+- If a sentence (or clause) is kept, it MUST be copied VERBATIM from the input (same words, same order).
+- Allowed micro-edits ONLY:
+  * remove URLs, navigation/cookie text, share/subscribe prompts, bylines, author blocks, publisher/outlet mentions
+  * remove image captions/layout fragments
+  * remove duplicated lines/fragments
+  * fix line-break hyphenation caused by wraps (e.g., "inter-\\nference" -> "interference") and normalize whitespace
+- Discard malformed/incomplete fragments.
+- Do not add any words not present in the input.
+
+Input text:
+<<<
+{raw_text}
+>>>
+""".strip()
 
 def _build_genai_extractor_retry_prompt(cleaned_text: str) -> str:
     return f"""You previously returned empty arrays or missed entities.
@@ -296,6 +315,37 @@ def _clean_text_with_llm(
     joined = re.sub(r"\n{3,}", "\n\n", joined)
     return joined.strip()
 
+def _clean_text_with_genai(
+    raw_text: str,
+    model: str,
+) -> str:
+    
+    client = _genai_client()
+    schema = _genai_cleaner_schema()
+
+    cleaned_parts: List[str] = []
+
+    prompt = _build_genai_cleaner_prompt(raw_text)
+
+    cfg = types.GenerateContentConfig(
+            temperature=float(os.getenv("GENAI_TEMPERATURE", "0.0")),
+            top_p=float(os.getenv("GENAI_TOP_P", "1.0")),
+            response_mime_type="application/json",
+            response_schema=schema,
+        )
+    try:
+        resp = client.models.generate_content(model=model, contents=prompt, config=cfg)
+        parsed = _safe_json_loads(getattr(resp, "text", "") or "")
+        if not isinstance(parsed, dict) or "cleaned_text" not in parsed:
+            raise ValueError("GenAI cleaner did not return JSON with cleaned_text")
+        cleaned_parts.append(str(parsed.get("cleaned_text", "")).strip())
+    except Exception as e:
+        print(f"GenAI cleaner error: {e}; using deterministic fallback")
+        cleaned_parts.append(_simple_clean_fallback(raw_text))
+    
+    joined = "\n\n".join([p for p in cleaned_parts if p.strip()]).strip()
+    joined = re.sub(r"\n{3,}", "\n\n", joined)
+    return joined.strip()
 
 # -----------------------------
 # Pass 2: Extract with GenAI (Gemini) (chunked)
@@ -325,6 +375,15 @@ def _genai_entity_schema() -> Dict[str, Any]:
         "required": ["locations", "organizations", "persons"],
     }
 
+def _genai_cleaner_schema() -> Dict[str, Any]:
+    # JSON Schema for structured output
+    return{
+        "type": "object",
+        "properties": {
+            "cleaned_text": {"type": "string"},
+        },
+        "required": ["cleaned_text"],
+    }
 
 def _extract_entities_with_genai(
     cleaned_text: str,
@@ -413,33 +472,13 @@ def call_to_gpt_api(text: str, timeout: int = 60) -> Dict[str, Any]:
     - Pass 2: entity extraction with GenAI (Gemini) using structured output (JSON Schema)
     - Returns: cleaned_text (capped), locations/orgs/persons (list[str])
     """
-    # --- Ollama cleaning ---
-    ollama_url = os.getenv("OLLAMA_GENERATE_URL", "http://localhost:11434/api/generate")
-    ollama_model = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
-
-    try:
-        cleaner_timeout = int(os.getenv("CLEANER_TIMEOUT", str(timeout)))
-    except Exception:
-        cleaner_timeout = timeout
-
-    opts = _default_ollama_options()
-
-    try:
-        cleaner_chunk = int(os.getenv("CLEANER_MAX_CHUNK_CHARS", "7000"))
-    except Exception:
-        cleaner_chunk = 7000
-
-    cleaned = _clean_text_with_llm(
-        raw_text=text,
-        api_url=ollama_url,
-        model=ollama_model,
-        timeout=cleaner_timeout,
-        options=opts,
-        max_chunk_chars=cleaner_chunk,
-    )
-
     # --- GenAI extraction (use full cleaned text, do NOT cap before extraction) ---
     genai_model = os.getenv("GENAI_MODEL", "gemini-2.0-flash")
+
+    cleaned = _clean_text_with_genai(
+        raw_text=text,
+        model=genai_model,
+    )
 
     try:
         genai_chunk = int(os.getenv("GENAI_MAX_CHUNK_CHARS", "12000"))
@@ -452,10 +491,8 @@ def call_to_gpt_api(text: str, timeout: int = 60) -> Dict[str, Any]:
         max_chunk_chars=genai_chunk,
     )
 
-    cleaned_capped = _cap_cleaned_text_for_downstream(cleaned)
-
     return {
-        "cleaned_text": cleaned_capped,
+        "cleaned_text": cleaned,
         "locations": entities.get("locations", []),
         "organizations": entities.get("organizations", []),
         "persons": entities.get("persons", []),
