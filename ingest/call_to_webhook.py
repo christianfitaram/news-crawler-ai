@@ -140,7 +140,7 @@ def send_to_webhook_thread_events(insert_id, webhook_url=None):
 
 
 def get_news_data(insert_id: str, timeout: float = FETCH_TIMEOUT) -> Optional[Dict[str, Any]]:
-    base_url = f"https://newsapi.one/v1/news/{insert_id}?apiKey={NEWSAPI_KEY}"
+    base_url = f"https://newsapi.one/v1/telegram/{insert_id}?apiKey={NEWSAPI_KEY}"
     try:
         response = SESSION.get(base_url, timeout=timeout)
         response.raise_for_status()
@@ -151,13 +151,13 @@ def get_news_data(insert_id: str, timeout: float = FETCH_TIMEOUT) -> Optional[Di
             return None
         data_to_return: Dict[str, Any] = {
             "article_id": data.get("id"),
-            "url": data.get("url"),
+            "url": data.get("telegramUrl"),
             "title": data.get("title"),
             "text": data.get("text"),
-            "topic": data.get("topic"),
+            "topic": "",
             "source": data.get("source"),
-            "sentiment": data.get("sentiment"),
-            "scraped_at": data.get("scraped_at"),
+            "sentiment": "",
+            "scraped_at": data.get("telegramDate"),
         }
         return data_to_return
     except (requests.exceptions.RequestException, ValueError) as e:
