@@ -78,7 +78,7 @@ def send_to_webhook_to_embedding(insert_id, webhook_url=None):
         if not payload:
             print("No data found to send to webhook.")
             return None
-
+        print(f"Fetched payload: {payload}")
         required_fields = ["article_id", "url", "title", "text", "topic", "source", "sentiment", "scraped_at"]
         validation_error = _validate_payload(payload, required_fields)
         if validation_error:
@@ -86,6 +86,7 @@ def send_to_webhook_to_embedding(insert_id, webhook_url=None):
             return None
 
         body = json.dumps(payload, separators=(',', ':'))
+        print(f"Payload for webhook: {body}")
         signature = hmac.new(
         WEBHOOK_SIGNATURE.encode(),
         body.encode(),
@@ -95,6 +96,7 @@ def send_to_webhook_to_embedding(insert_id, webhook_url=None):
             "X-Signature": f"sha256={signature}",
             "Content-Type": "application/json"    
         }
+        print(f"Headers for webhook: {headers}")
         target_url = webhook_url or os.getenv("WEBHOOK_URL", "http://localhost:8080/webhook/news")
         return _post_json(target_url, body, headers, timeout=DEFAULT_TIMEOUT)
 
