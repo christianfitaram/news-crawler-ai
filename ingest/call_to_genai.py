@@ -295,8 +295,7 @@ def call_to_genai_sdk(text: str, timeout: int = 60) -> Dict[str, Any]:
     Full GenAI (Gemini) cleaning + entity extraction pipeline.
     """
     # --- GenAI extraction (use full cleaned text, do NOT cap before extraction) ---
-    genai_model = os.getenv("GENAI_MODEL", "gemini-2.0-flash")
-
+    genai_model = "gemini-2.5-flash-lite"
     cleaned = _clean_text_with_genai(
         raw_text=text,
         model=genai_model,
