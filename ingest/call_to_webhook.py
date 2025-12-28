@@ -104,7 +104,7 @@ def send_to_webhook_to_embedding(insert_id, webhook_url=None):
         }
         print(f"Headers for webhook: {headers}")
         target_url = webhook_url or os.getenv("WEBHOOK_URL", "http://localhost:8080/webhook/news")
-        return _post_json(target_url, raw_body, headers, timeout=DEFAULT_TIMEOUT, to="embedding")
+        return _post_json(target_url, raw_body, headers, timeout=DEFAULT_TIMEOUT)
 
     except requests.exceptions.RequestException as e:
         # Network-level errors, timeouts, DNS, etc.
