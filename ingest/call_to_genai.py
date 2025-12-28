@@ -163,63 +163,6 @@ def call_ollama_generate(
     return data.get("response", "") if isinstance(data, dict) else ""
 
 # -----------------------------
-# Prompts
-# -----------------------------
-
-def _build_genai_extractor_prompt(cleaned_text: str) -> str:
-    # NOTE: We rely on response_schema for structure, not "ONLY JSON" prompting.
-    return f"""Extract named entities from the text.
-
-Rules:
-- Extract entities ONLY from the text below.
-- Every entity MUST appear EXACTLY as a substring in the text (verbatim match).
-- Do NOT infer, normalize, expand, translate, or correct names.
-- Deduplicate case-insensitively, keep first-seen casing.
-- Prefer full names as written (e.g., "Fedor Gorst" over "Gorst" if both appear).
-- If none exist for a category, return an empty array for that category.
-
-Text:
-<<<
-{cleaned_text}
->>>
-""".strip()
-
-def _build_genai_cleaner_prompt(raw_text: str) -> str:
-    # NOTE: We rely on response_schema for structure, not "ONLY JSON" prompting.
-    return f"""You are a STRICT text cleaner.
-    LEANING RULES (DELETE-ONLY):
-- You may ONLY remove content; do NOT paraphrase, summarize, translate, or reorder.
-- If a sentence (or clause) is kept, it MUST be copied VERBATIM from the input (same words, same order).
-- Allowed micro-edits ONLY:
-  * remove URLs, navigation/cookie text, share/subscribe prompts, bylines, author blocks, publisher/outlet mentions
-  * remove image captions/layout fragments
-  * remove duplicated lines/fragments
-  * fix line-break hyphenation caused by wraps (e.g., "inter-\\nference" -> "interference") and normalize whitespace
-- Discard malformed/incomplete fragments.
-- Do not add any words not present in the input.
-
-Input text:
-<<<
-{raw_text}
->>>
-""".strip()
-
-def _build_genai_extractor_retry_prompt(cleaned_text: str) -> str:
-    return f"""You previously returned empty arrays or missed entities.
-
-Hard rules:
-- Every item MUST appear verbatim as a substring in the text.
-- If there is ANY proper name (person/org/place) in the text, you MUST include it.
-- Only return empty arrays if there are truly none in the text.
-
-Text:
-<<<
-{cleaned_text}
->>>
-""".strip()
-
-
-# -----------------------------
 # JSON parsing / validation
 # -----------------------------
 def _safe_json_loads(s: str) -> Optional[dict]:
@@ -236,54 +179,42 @@ def _safe_json_loads(s: str) -> Optional[dict]:
         except Exception:
             return None
 
-
-def _validate_extractor_schema(d: Dict[str, Any]) -> None:
-    required = ("locations", "organizations", "persons")
-    missing = [k for k in required if k not in d]
-    if missing:
-        raise ValueError(f"Extractor JSON missing keys {missing}. Got keys: {list(d.keys())}")
-    for k in required:
-        v = d.get(k)
-        if v is None:
-            continue
-        if not isinstance(v, list):
-            raise ValueError(f"Extractor key '{k}' must be a list, got {type(v)}")
-
 # -----------------------------
 # Pass 1: Clean with GenAI (Gemini)
 # -----------------------------
-def _clean_text_with_genai(
-    raw_text: str,
-    model: str,
-) -> str:
-    
+def _clean_text_with_genai(raw_text: str, model: str) -> str:
     client = GeminiClient.get_client()
-    schema = _genai_cleaner_schema()
-
-    cleaned_parts: List[str] = []
-
-    prompt = _build_genai_cleaner_prompt(raw_text)
+    
+    # SYSTEM INSTRUCTION: Sets the permanent behavior/rules
+    sys_instr = (
+        "Act as a VERBATIM text cleaner. Output ONLY JSON. "
+        "Rules: DELETE-ONLY. No paraphrasing, summarizing, or reordering. "
+        "Keep text exactly as provided. "
+        "REMOVE: URLs, nav/cookie text, ads, bylines, author/publisher info, "
+        "image captions, and layout fragments. "
+        "FIX: Normalize whitespace and join hyphenated line-breaks."
+    )
 
     cfg = types.GenerateContentConfig(
-            temperature=float(os.getenv("GENAI_TEMPERATURE", "0.0")),
-            top_p=float(os.getenv("GENAI_TOP_P", "1.0")),
-            response_mime_type="application/json",
-            response_schema=schema,
-        )
-    try:
-        resp = client.models.generate_content(model=model, contents=prompt, config=cfg)
-        parsed = _safe_json_loads(getattr(resp, "text", "") or "")
-        if not isinstance(parsed, dict) or "cleaned_text" not in parsed:
-            raise ValueError("GenAI cleaner did not return JSON with cleaned_text")
-        cleaned_parts.append(str(parsed.get("cleaned_text", "")).strip())
-    except Exception as e:
-        print(f"GenAI cleaner error: {e}; using deterministic fallback")
-        cleaned_parts.append(_simple_clean_fallback(raw_text))
-    
-    joined = "\n\n".join([p for p in cleaned_parts if p.strip()]).strip()
-    joined = re.sub(r"\n{3,}", "\n\n", joined)
-    return joined.strip()
+        system_instruction=sys_instr,
+        temperature=0.0,
+        response_mime_type="application/json",
+        response_schema=_genai_cleaner_schema(),
+    )
 
+    try:
+        # The user content now ONLY contains the variable data
+        resp = client.models.generate_content(
+            model=model, 
+            contents=f"TEXT TO CLEAN:\n{raw_text}", 
+            config=cfg
+        )
+        parsed = _safe_json_loads(getattr(resp, "text", "") or "")
+        return str(parsed.get("cleaned_text", "")).strip()
+    except Exception as e:
+        print(f"GenAI cleaner error: {e}")
+        return _simple_clean_fallback(raw_text)
+    
 # -----------------------------
 # Pass 2: Extract with GenAI (Gemini) (chunked)
 # -----------------------------
@@ -315,59 +246,47 @@ def _extract_entities_with_genai(
     max_chunk_chars: int,
 ) -> Dict[str, List[str]]:
     chunks = _chunk_text(cleaned_text, max_chunk_chars)
-    if not chunks:
-        return {"locations": [], "organizations": [], "persons": []}
-
     client = GeminiClient.get_client()
-    schema = _genai_entity_schema()
 
-    locs: List[str] = []
-    orgs: List[str] = []
-    pers: List[str] = []
+    # SYSTEM INSTRUCTION: Permanent rules for extraction
+    sys_instr = (
+        "Extract named entities ONLY from the provided text. "
+        "STRICT RULE: Every entity MUST be a verbatim substring from the input. "
+        "Do NOT infer, translate, or correct names. "
+        "Deduplicate case-insensitively, keeping the first-seen casing. "
+        "Return empty arrays if no entities are found."
+    )
 
-    for i, ch in enumerate(chunks, 1):
-        prompt = _build_genai_extractor_prompt(ch)
+    cfg = types.GenerateContentConfig(
+        system_instruction=sys_instr,
+        temperature=0.0,
+        response_mime_type="application/json",
+        response_schema=_genai_entity_schema(),
+    )
 
-        cfg = types.GenerateContentConfig(
-            temperature=float(os.getenv("GENAI_TEMPERATURE", "0.0")),
-            top_p=float(os.getenv("GENAI_TOP_P", "1.0")),
-            response_mime_type="application/json",
-            response_schema=schema,
-        )
+    locs, orgs, pers = [], [], []
 
+    for ch in chunks:
         try:
-            resp = client.models.generate_content(model=model, contents=prompt, config=cfg)
-            # With structured output, .text should already be JSON
+            resp = client.models.generate_content(
+                model=model, 
+                contents=f"EXTRACT FROM THIS TEXT:\n{ch}", 
+                config=cfg
+            )
             parsed = _safe_json_loads(getattr(resp, "text", "") or "")
-            if not isinstance(parsed, dict):
-                raise ValueError(f"GenAI extractor did not return JSON object. Raw: {(getattr(resp,'text','') or '')[:300]}")
-
-            _validate_extractor_schema(parsed)
-            norm = normalize_entity_lists(parsed)
-
-            # Retry once per chunk if empty (still GenAI-only)
-            if not (norm["locations"] or norm["organizations"] or norm["persons"]):
-                retry_prompt = _build_genai_extractor_retry_prompt(ch)
-                resp2 = client.models.generate_content(model=model, contents=retry_prompt, config=cfg)
-                parsed2 = _safe_json_loads(getattr(resp2, "text", "") or "")
-                if isinstance(parsed2, dict):
-                    _validate_extractor_schema(parsed2)
-                    norm2 = normalize_entity_lists(parsed2)
-                    norm = norm2
-
-            locs.extend(norm["locations"])
-            orgs.extend(norm["organizations"])
-            pers.extend(norm["persons"])
-
+            if isinstance(parsed, dict):
+                norm = normalize_entity_lists(parsed)
+                locs.extend(norm["locations"])
+                orgs.extend(norm["organizations"])
+                pers.extend(norm["persons"])
         except Exception as e:
-            print(f"GenAI extractor error on chunk {i}/{len(chunks)}: {e}; skipping this chunk")
+            print(f"Extraction error: {e}")
 
     return {
         "locations": _dedupe_preserve_first(locs),
         "organizations": _dedupe_preserve_first(orgs),
         "persons": _dedupe_preserve_first(pers),
     }
-
 # -----------------------------
 # SDK call entry point
 # -----------------------------
