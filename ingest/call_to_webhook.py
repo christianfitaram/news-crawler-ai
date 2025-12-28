@@ -57,9 +57,12 @@ def _log_outgoing(target_url: str, headers: Dict[str, Any], payload: Dict[str, A
         print("Payload (repr):", repr(payload))
 
 
-def _post_json(url: str, payload: Dict[str, Any], headers: Dict[str, str], timeout: float) -> Optional[Dict[str, Any]]:
+def _post_json(url: str, payload: Dict[str, Any], headers: Dict[str, str], timeout: float, to:str) -> Optional[Dict[str, Any]]:
     _log_outgoing(url, headers, payload)
-    response = SESSION.post(url, data=payload, headers=headers, timeout=timeout)
+    if to == "embedding":
+        response = SESSION.post(url, data=payload, headers=headers, timeout=timeout)
+    else:
+        response = SESSION.post(url, json=payload, headers=headers, timeout=timeout)
     try:
         response.raise_for_status()
         print(f"Webhook POST succeeded: {response.status_code} Body: {response.text}")
@@ -70,7 +73,6 @@ def _post_json(url: str, payload: Dict[str, Any], headers: Dict[str, str], timeo
     except requests.HTTPError as http_err:
         print(f"Error sending to webhook: {http_err} Status: {response.status_code} Body: {response.text}")
         return None
-
 
 def send_to_webhook_to_embedding(insert_id, webhook_url=None):
     try:
@@ -104,7 +106,7 @@ def send_to_webhook_to_embedding(insert_id, webhook_url=None):
         }
         print(f"Headers for webhook: {headers}")
         target_url = webhook_url or os.getenv("WEBHOOK_URL", "http://localhost:8080/webhook/news")
-        return _post_json(target_url, raw_body, headers, timeout=DEFAULT_TIMEOUT)
+        return _post_json(target_url, raw_body, headers, timeout=DEFAULT_TIMEOUT, to="embedding")
 
     except requests.exceptions.RequestException as e:
         # Network-level errors, timeouts, DNS, etc.
@@ -146,7 +148,7 @@ def send_to_webhook_thread_events(insert_id, webhook_url=None):
         target_url = webhook_url or os.getenv("WEBHOOK_URL_THREAD_EVENTS",
                                               "http://localhost:8000/webhooks/article-vectorized")
         headers = {"Content-Type": "application/json"}
-        return _post_json(target_url, payload, headers, timeout=DEFAULT_TIMEOUT)
+        return _post_json(target_url, payload, headers, timeout=DEFAULT_TIMEOUT, to="thread_events")
     except requests.exceptions.RequestException as e:
         # Network-level errors, timeouts, DNS, etc.
         print(f"Error sending to webhook (network): {e}")
