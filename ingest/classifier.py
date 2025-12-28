@@ -3,7 +3,7 @@ import os
 
 from dotenv import load_dotenv
 
-from ingest.call_to_GPT import call_to_gpt_api
+from ingest.call_to_genai import call_to_genai_sdk
 
 from .call_to_webhook import send_to_all_webhooks
 from pathlib import Path
@@ -237,19 +237,19 @@ def classify_articles():
             topic = topic_pipeline(summary, candidate_labels=CANDIDATE_TOPICS)
             sentiment = sentiment_pipeline(summary)[0]
             try:
-                gpt_result = call_to_gpt_api(article.get("text"), timeout=60)  # 60 second timeout
-                print("gpt_result: -->",gpt_result)
+                genai_result = call_to_genai_sdk(article.get("text"), timeout=60)  # 60 second timeout
+                print("genai_result: -->", genai_result)
             except Exception as e:
                 print(f"[{i}] ⚠️ Text cleaning failed: {e}, using original text")
-                gpt_result = {
+                genai_result = {
                     "cleaned_text": article.get("text", ""),
                     "locations": [],
                     "organizations": [],
                     "persons": [],
                 }
-            text_cleaned = gpt_result.get("cleaned_text", article.get("text", ""))
+            text_cleaned = genai_result.get("cleaned_text", article.get("text", ""))
             entities_enriched = None
-            if not (gpt_result.get("locations") or gpt_result.get("organizations") or gpt_result.get("persons")):
+            if not (genai_result.get("locations") or genai_result.get("organizations") or genai_result.get("persons")):
                 entities_enriched = None
             classified_article = {
                 "title": article.get("title"),
@@ -265,9 +265,9 @@ def classify_articles():
                     "label": sentiment["label"],
                     "score": sentiment["score"]
                 },
-                "locations": gpt_result.get("locations", []) or (entities_enriched or {}).get("locations", []),
-                "organizations": gpt_result.get("organizations", []) or (entities_enriched or {}).get("organizations", []),
-                "persons": gpt_result.get("persons", []) or (entities_enriched or {}).get("persons", []),
+                "locations": genai_result.get("locations", []) or (entities_enriched or {}).get("locations", []),
+                "organizations": genai_result.get("organizations", []) or (entities_enriched or {}).get("organizations", []),
+                "persons": genai_result.get("persons", []) or (entities_enriched or {}).get("persons", []),
             }
             # set data for metadata
             num_well_classified += 1
