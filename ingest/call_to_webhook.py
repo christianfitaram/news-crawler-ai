@@ -1,7 +1,8 @@
 import json
 import os
 from typing import Any, Dict, Iterable, Optional
-
+import hashlib
+import hmac
 import requests
 from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
@@ -84,13 +85,18 @@ def send_to_webhook_to_embedding(insert_id, webhook_url=None):
             print(validation_error)
             return None
 
+        body = json.dumps(payload, separators=(',', ':'))
+        signature = hmac.new(
+        WEBHOOK_SIGNATURE.encode(),
+        body.encode(),
+        hashlib.sha256).hexdigest()
+        
         headers = {
-            "Content-Type": "application/json",
-            "X-Signature": WEBHOOK_SIGNATURE,
+            "X-Signature": f"sha256={signature}",
+            "Content-Type": "application/json"    
         }
-
         target_url = webhook_url or os.getenv("WEBHOOK_URL", "http://localhost:8080/webhook/news")
-        return _post_json(target_url, payload, headers, timeout=DEFAULT_TIMEOUT)
+        return _post_json(target_url, body, headers, timeout=DEFAULT_TIMEOUT)
 
     except requests.exceptions.RequestException as e:
         # Network-level errors, timeouts, DNS, etc.
