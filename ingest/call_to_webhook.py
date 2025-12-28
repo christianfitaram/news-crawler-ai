@@ -161,7 +161,7 @@ def send_to_webhook_thread_events(insert_id, webhook_url=None):
         print(f"Headers for webhook: {headers}")
         target_url = webhook_url or os.getenv("WEBHOOK_URL_THREAD_EVENTS",
                                               "http://localhost:8000/webhooks/article-vectorized")
-        return _post_json(target_url, raw_body, headers, timeout=DEFAULT_TIMEOUT, to="thread_events")
+        return _post_json(target_url, raw_body, headers, timeout=DEFAULT_TIMEOUT)
     except requests.exceptions.RequestException as e:
         # Network-level errors, timeouts, DNS, etc.
         print(f"Error sending to webhook (network): {e}")
