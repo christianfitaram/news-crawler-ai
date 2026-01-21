@@ -85,6 +85,8 @@ def send_to_webhook_to_embedding(insert_id, webhook_url=None):
             print(validation_error)
             return None
 
+        payload["table"] = "news_embeddings"
+
         raw_body = json.dumps(
             payload,
             separators=(",", ":"),   
