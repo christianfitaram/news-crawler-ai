@@ -41,3 +41,29 @@
 **Notes**
 - Always match ChromeDriver to the exact browser version. For snap-based Chromium, use the version from `/snap/bin/chromium --version` and download the corresponding driver from `chrome-for-testing-public`.
 - If using `webdriver_manager`, pin a matching driver or supply `CHROMEDRIVER_PATH` to bypass automatic downloads.
+
+### Systemd services
+
+The production unit at `scripts/systemd/news-crawler-ai.service` already exports both `CHROME_BIN=/snap/bin/chromium` and `CHROMEDRIVER_PATH=/usr/local/bin/chromedriver-143.0.7499.40`. When you update Chromium (for example from `143.0.7499.40` to a later 143.x+ build), install the matching driver in `/usr/local/bin`, change the `Environment=CHROMEDRIVER_PATH=...` line to the new binary, and run `sudo systemctl daemon-reload && sudo systemctl restart news-crawler-ai.service`. Matching these versions keeps the Selenium session alive.
+
+Verify the pair before restarting:
+
+```
+/snap/bin/chromium --version           # should say Chromium 143.0.7499.40 (or the version you installed)
+/usr/local/bin/chromedriver-.. --version  # should report the same 143.x release
+```
+
+If the driver is still showing version 114 in the logs, double-check that `CHROMEDRIVER_PATH` points to the newly installed binary, not the older `/usr/local/bin/chromedriver` or another symlink. The service log line `Environment=CHROMEDRIVER_PATH=/usr/local/bin/chromedriver-143.0.7499.40` helps you trace which binary was supplied to the daemon.
+
+### Systemd services
+
+The production unit at `scripts/systemd/news-crawler-ai.service` already exports both `CHROME_BIN=/snap/bin/chromium` and `CHROMEDRIVER_PATH=/usr/local/bin/chromedriver-143.0.7499.40`. When you update Chromium (for example from `143.0.7499.40` to a later 143.x+ build), install the matching driver in `/usr/local/bin`, change the `Environment=CHROMEDRIVER_PATH=...` line to the new binary, and run `sudo systemctl daemon-reload && sudo systemctl restart news-crawler-ai.service`. Matching these versions keeps the Selenium session alive.
+
+Verify the pair before restarting:
+
+```
+/snap/bin/chromium --version           # should say Chromium 143.0.7499.40 (or the version you installed)
+/usr/local/bin/chromedriver-.. --version  # should report the same 143.x release
+```
+
+If the driver is still showing version 114 in the logs, double-check that `CHROMEDRIVER_PATH` points to the newly installed binary, not the older `/usr/local/bin/chromedriver` or another symlink. The service log line `Environment=CHROMEDRIVER_PATH=/usr/local/bin/chromedriver-143.0.7499.40` helps you trace which binary was supplied to the daemon.
